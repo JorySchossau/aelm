@@ -1,5 +1,5 @@
 when defined(windows):
-  import os, tools/urldownloader
+  import tools/urldownloader
 
   proc syncDownload*(url, file: string) =
     proc progress(status: DownloadStatus, progress: uint, total: uint,
