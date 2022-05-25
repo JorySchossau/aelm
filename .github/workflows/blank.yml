@@ -1,0 +1,46 @@
+name: Release Builds
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      buildwin:
+        type: boolean
+      buildosx:
+        type: boolean
+      buildlin:
+        type: boolean
+jobs:
+  build-win:
+    runs-on: windows-latest
+    if: contains(github.event.head_commit.message, 'please release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildwin == 'true')
+    steps:
+      - uses: actions/checkout@v3
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Get Nim
+        run: |
+          curl --output choosenim.exe -L "https://github.com/dom96/choosenim/releases/download/v0.8.2/choosenim-0.8.2_windows_amd64.exe"
+          .\choosenim.exe -y stable
+      - name: Add Nim Path
+        run: echo "$HOME\.nimble\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Test Nim
+        run: nim -v
+      - name: build
+        run: nim c --cc:vcc -o:aelm.exe -d:cputype=x86_64 -d:release -d:danger -d:ssl -l:-s --opt:size --panics:on aelm
+      - name: Run UPX
+        uses: crazy-max/ghaction-upx@v1
+        with:
+          version: latest
+          files: ./aelm.exe
+          args: --best -q
+      - name: Upload Windows Binary
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: aelm.exe
+          asset_name: windows
+          tag: latest
+          overwrite: true
