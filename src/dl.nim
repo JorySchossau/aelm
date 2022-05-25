@@ -16,7 +16,7 @@ when defined(windows):
     echo "100%"
 
 else:
-  import os, asyncdispatch, httpclient
+  import httpclient
 
   proc syncDownload*(url, file: string) =
     var client = newHttpClient()

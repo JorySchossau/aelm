@@ -340,7 +340,7 @@ iterator aelmDirs(basepath: string): tuple[name, namever:string, connections:str
   var name, category, version, namever, connections: string
   var connectionsList: seq[string]
   for dir in os.walkDir(basepath):
-    if dir.kind == pcDir and existsFile(joinPath(dir.path, CONF_MOD_FILENAME)):
+    if dir.kind == pcDir and fileExists(joinPath(dir.path, CONF_MOD_FILENAME)):
       name = dir.path.relativePath basepath.normalizedPath
       let module = loadAelmModule dir.path
       namever = fmt"{module.category}@{module.version}"
