@@ -413,16 +413,6 @@ proc doList =
   for module in modules:
     echo &"{module.name.alignLeft(maxNameLen)} {module.namever.alignLeft(maxNameVerLen)} {module.connections}"
 
-proc placeholderDownloadPackagesList =
-  # TODO replace better later
-  let content = readFile CONF_FILENAME
-    #yamlContent = part1 & part2
-  if userEnabled:
-    createDir getHomeDir() / ".aelm"
-    (getHomeDir() / ".aelm" / CONF_FILENAME).writeFile content
-  else:
-    CONF_FILENAME.writeFile content
-
 proc appCacheDir: string =
   let cacheDir = getCacheDir("aelm")
   createDir cacheDir
@@ -463,7 +453,6 @@ proc helperLoadAelmRepo(path: string): AelmRepo =
     close stream
 
 proc doInit =
-  # TODO replace better later
   let filePath = block:
     if userEnabled: getHomeDir() / ".aelm" / CONF_FILENAME
     else: getCurrentDir() / CONF_FILENAME
