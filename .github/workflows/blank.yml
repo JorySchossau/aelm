@@ -29,7 +29,7 @@ jobs:
       - name: Test Nim
         run: nim -v
       - name: build
-        run: nim c --cc:vcc -o:aelm.exe -d:cputype=x86_64 -d:release -d:danger -d:ssl -l:-s --opt:size --panics:on aelm
+        run: nimble build -y
       - name: Run UPX
         uses: crazy-max/ghaction-upx@v1
         with:
