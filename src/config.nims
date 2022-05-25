@@ -11,6 +11,7 @@ switch("passL","-s")
 setCommand "c"
 
 when defined(windows):
+  switch("cc","vcc")
   if buildCPU == "amd64": switch("define", "cputype=x86_64")
   else:
     echo "OS " & buildCPU & " not supported for windows"
