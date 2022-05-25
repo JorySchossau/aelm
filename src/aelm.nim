@@ -480,7 +480,7 @@ const aelmos = block:
 const cputype {.strdefine.} = ""
 const aelmcpu = block:
   when cputype == "":
-    {.error: "cputype must be defined at compile-time on CLI (x86_64 or arm)".}
+    {.error: "cputype must be defined at compile-time on CLI (x86_64 or arm) ex: -d:cputype=x86_64".}
   else:
     cputype
 
