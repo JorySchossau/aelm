@@ -1,10 +1,12 @@
+
 --warnings:off
 --hints:off
-switch("define","cputype=x86_64")
-
---define:ssl
 
 # required for stand-alone SSL
+--define:ssl
+
+#switch("define","cputype=x86_64")
+#
 #--threads:on
 #--dynlibOverride:ssl
 #--passL:"lib/libssl.a"

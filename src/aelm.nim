@@ -4,14 +4,6 @@
 # * create packages github repo
 # * create commit hooks that update aggregation of files into one repo file
 # * allow specify repo(s) when init
-#
-# * install/uninstall commands; home dir install like pip
-#
-# * description fields for modules
-#
-# * --prefer make
-#
-# * stdin streaming
 
 # arg parsing
 import parseopt # cli parsing
@@ -23,12 +15,13 @@ import macros # updateVarIfKeyOfSameName
 import std/[json, sequtils, strutils, tables, strformat, os, osproc, sets, algorithm, streams]
 from std/os import getHomeDir, createDir
 from std/rdstdin import readLineFromStdin # for stdin piping
-import parsetoml
 import yaml/serialization, streams
 from dl import syncDownload
 from std/sugar import dup, collect, `=>`
 import zstd/decompress as zstdx
 import zippy/ziparchives as zipx
+when defined(windows):
+  import std/registry
 
 
 ## TODO move to external cli lib
@@ -86,14 +79,20 @@ registerArg(script, nargs = 1, aliases = ["sc"])
 # OPTIONS
 registerArg(help, nargs = 1, aliases = ["h"])
 registerArg(user)
+registerArg(description)
 registerArg(clearTheEntireCache, aliases = ["clear-cache"])
 registerArg(preferSystemVersionOfExecutable, nargs = 1, aliases = ["prefer-system"])
 
 const
   CONF_FILENAME = ".aelm.yaml"
   CONF_MOD_FILENAME = ".aelm.mod.yaml"
+  ScriptExtension = block:
+    when defined(windows):
+      ".bat"
+    else:
+      ""
 
-const ACTIVATE_SCRIPT_LINUX = """#!/bin/env sh
+const ACTIVATE_SCRIPT_LINUX = """
 ## {name} environment setup
 case ":${PATH}:" in
   *:"{bin}":*)
@@ -104,7 +103,7 @@ case ":${PATH}:" in
     ;;
 esac
 """
-const DEACTIVATE_SCRIPT_LINUX = """#!/bin/env sh
+const DEACTIVATE_SCRIPT_LINUX = """
 ## {name} environment setup
 case ":${PATH}:" in
   *:"{bin}":*)
@@ -115,6 +114,40 @@ case ":${PATH}:" in
   *)
     ;;
 esac
+"""
+const ACTIVATE_SCRIPT_WINDOWS = """
+@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+
+rem {name} environment setup
+
+set "substr={bin};"
+echo.!PATH! | findstr /C:"{bin};" 1>nul
+if errorlevel 1 (
+  rem not found in path. add to path.
+  set NEWPATH=!substr!!PATH!
+) else (
+  set "NEWPATH=!PATH!"
+  rem do nothing / already activated
+)
+endlocal & path %NEWPATH%
+"""
+const DEACTIVATE_SCRIPT_WINDOWS = """
+@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+
+rem {name} environment setup
+
+set "substr={bin};"
+echo.!PATH! | findstr /C:"{bin};" 1>nul
+if errorlevel 1 (
+  rem do nothing. no module in path.
+  set "NEWPATH=!PATH!"
+) else (
+  rem found in path. remove from path.
+  set "NEWPATH=!PATH:%substr%=!"
+)
+endlocal & path %NEWPATH%
 """
 
 type
@@ -211,7 +244,7 @@ proc aelmReplacementPairsFromAelmEnv(env: AelmModule):auto =
 
 proc expandPlaceholders(env: var AelmModule) =
   let replacements = aelmReplacementPairsFromAelmEnv env
-  env.bin = env.bin.multiReplace(replacements)
+  env.bin = env.bin.multiReplace(replacements).dup(normalizePath)
   for line in env.presetup.mitems:
     line = line.multiReplace(replacements)
   for line in env.setup.mitems:
@@ -219,7 +252,7 @@ proc expandPlaceholders(env: var AelmModule) =
   for line in env.postsetup.mitems:
     line = line.multiReplace(replacements)
   for value in env.envvars.mvalues:
-    value = value.multiReplace(replacements)
+    value = value.multiReplace(replacements).dup(normalizePath)
   for dl in env.downloads.mitems:
     dl.url = dl.url.multiReplace(replacements)
     dl.name = block:
@@ -302,25 +335,6 @@ proc loadAelmModule(path: string): AelmModule =
     quit(1)
   return module
 
-proc readUserInstalledModules: HashSet[string] =
-  ## TODO Windows
-  let fileName = "activate"
-  let filePath = getHomeDir() / ".aelm" / fileName
-  if not fileExists filePath: return
-  result = readLines(filePath) . filterIt(it.len.bool) . mapIt(it.split()[1].splitPath.head.splitPath.tail) . toHashSet
-
-proc writeUserInstalledModules(modules: HashSet[string]) =
-  ## TODO Windows
-  let fileName = "activate"
-  let filePath = getHomeDir() / ".aelm" / fileName
-  # TODO Windows
-  var contents = modules . toSeq . mapIt(&"source " & getHomeDir() / ".aelm" / it / "activate") . join("\n")
-  try:
-    filePath.writeFile contents
-  except [IOError]:
-    writeError("Error: ", "Unable to write file '{filePath}'")
-    quit(1)
-
 iterator aelmDirs(basepath: string): tuple[name, namever:string, connections:string] =
   # return all immediate dirs of `basepath` with aelm.conf files in them
   var name, category, version, namever, connections: string
@@ -336,6 +350,57 @@ iterator aelmDirs(basepath: string): tuple[name, namever:string, connections:str
         else: '[' & connectionsList.join(", ") & ']'
       yield (name, namever, connections)
 
+proc readUserInstalledModules: HashSet[string] =
+  let
+    fileName = "activate" & ScriptExtension
+    fileDir = getHomeDir() / ".aelm"
+    filePath = fileDir / fileName
+  if not fileExists filePath: return
+  result = readFile(filePath) . splitLines . filterIt(it.len.bool) . mapIt(it.split()[1].splitPath.head.splitPath.tail) . toHashSet
+
+proc writeUserInstalledModules(modules: HashSet[string]) =
+  let fileName = "activate" & ScriptExtension
+  let filePath = getHomeDir() / ".aelm" / fileName
+  let callCommand = block:
+    when defined(windows):
+      "call "
+    else:
+      "source "
+  var contents = modules . toSeq . mapIt(callCommand & getHomeDir() / ".aelm" / it / fileName) . join("\n")
+  let previouslyInstalledModules = readUserInstalledModules()
+  try:
+    filePath.writeFile contents
+  except [IOError]:
+    writeError("Error: ", "Unable to write file '{filePath}'")
+    quit(1)
+  when defined(windows):
+    # update registry
+    const
+      REGISTRY_LOCATION = """System\CurrentControlSet\Control\Session Manager\Environment"""
+      REGISTRY_KEY = "Path"
+    let uninstalledModules = previouslyInstalledModules - modules
+    let newModules = modules - previouslyInstalledModules
+    var paths = getUnicodeValue(REGISTRY_LOCATION, REGISTRY_KEY, HKEY_LOCAL_MACHINE).split(';')
+    # uninstall old modules
+    for moduleName in uninstalledModules.toSeq:
+      let path = getHomeDir() / ".aelm" / moduleName
+      var module = loadAelmModule path
+      let replacements = aelmReplacementPairsFromAelmEnv module
+      expandPlaceholders module
+      if module.bin in paths:
+        let index = paths.find module.bin
+        paths.delete index
+    # install new modules
+    for moduleName in newModules.toSeq:
+      let path = getHomeDir() / ".aelm" / moduleName
+      var module = loadAelmModule path
+      let replacements = aelmReplacementPairsFromAelmEnv module
+      expandPlaceholders module
+      if module.bin notin paths: paths.insert(module.bin, 0)
+    let pathsAsString = paths.join(";")
+    setUnicodeValue(REGISTRY_LOCATION, REGISTRY_KEY, pathsAsString, HKEY_LOCAL_MACHINE)
+    echo pathsAsString
+
 proc doList =
   if userEnabled: listArgs = @[getHomeDir() / ".aelm"]
   let pth = if listArgs.len != 0: listArgs[0] else: getCurrentDir()
@@ -350,17 +415,45 @@ proc doList =
 
 proc placeholderDownloadPackagesList =
   # TODO replace better later
-  const yamlContent = staticRead CONF_FILENAME
+  let content = readFile CONF_FILENAME
+    #yamlContent = part1 & part2
   if userEnabled:
     createDir getHomeDir() / ".aelm"
-    (getHomeDir() / ".aelm" / CONF_FILENAME).writeFile yamlContent
+    (getHomeDir() / ".aelm" / CONF_FILENAME).writeFile content
   else:
-    CONF_FILENAME.writeFile yamlContent
+    CONF_FILENAME.writeFile content
 
-proc helperLoadAelmRepo: AelmRepo =
+proc appCacheDir: string =
+  let cacheDir = getCacheDir("aelm")
+  createDir cacheDir
+  return cacheDir
+
+proc download(url, destination, filename:string; useCache: bool = true, verbose: bool = true) =
+  # returns full path to downloaded file (or cached file)
+  if verbose: echo &"downloading {url}"
+  if useCache:
+    let filepath = appCacheDir() / filename
+    if not fileExists filepath:
+      syncDownload(url, filepath)
+    else:
+      echo "(using cached installer)"
+    filepath.copyFileToDir destination
+  else:
+    let filepath = destination / filename
+    syncDownload(url, filepath)
+
+proc downloadRepoFile =
+  const REPO_URL = "https://github.com/JorySchossau/aelm-packages/releases/download/latest/aelm-repo.yaml"
+  if userEnabled:
+    createDir getHomeDir() / ".aelm"
+    download(url = REPO_URL, destination = getHomeDir()/".aelm", filename = CONF_FILENAME, useCache = false, verbose = false)
+  else:
+    download(url = REPO_URL, destination = getCurrentDir(), filename = CONF_FILENAME, useCache = false, verbose = false)
+
+proc helperLoadAelmRepo(path: string): AelmRepo =
   var stream: FileStream
   try:
-    stream = newFileStream(CONF_FILENAME, fmRead)
+    stream = newFileStream(path, fmRead)
     stream.load result
     close stream
   except [IOError]:
@@ -372,21 +465,21 @@ proc helperLoadAelmRepo: AelmRepo =
 proc doInit =
   # TODO replace better later
   let filePath = block:
-    if userEnabled: getCurrentDir() / ".aelm.yaml"
-    else: getHomeDir() / ".aelm" / ".aelm.yaml"
+    if userEnabled: getHomeDir() / ".aelm" / CONF_FILENAME
+    else: getCurrentDir() / CONF_FILENAME
   echo "downloading repository to " & filePath
-  placeholderDownloadPackagesList()
-  let repo = helperLoadAelmRepo()
+  downloadRepoFile()
+  let repo = helperLoadAelmRepo filePath
   echo &"{repo.keys.toSeq.len} items in new repository"
 
 proc loadAelmRepo: AelmRepo =
-  let configPath = block:
+  let filePath = block:
     if userEnabled: getHomeDir() / ".aelm" / CONF_FILENAME
-    else: CONF_FILENAME
-  if not fileExists configPath:
-    writeWarning("Warning: ", &"no repo file found in '{configPath}'")
+    else: getCurrentDir() / CONF_FILENAME
+  if not fileExists filePath:
+    writeWarning("Warning: ", &"no repo file found in '{filePath}'")
     doInit()
-  result = helperLoadAelmRepo()
+  result = helperLoadAelmRepo filePath
 
 const aelmos = block:
   when defined(windows):
@@ -462,22 +555,6 @@ proc getAelmModule(repo: AelmRepo, category, version: string): AelmModule =
   
   return env
 
-proc appCacheDir: string =
-  let cacheDir = getCacheDir("aelm")
-  createDir cacheDir
-  return cacheDir
-
-proc download(url, destination, filename:string; useCache: bool = true) =
-  # returns full path to downloaded file (or cached file)
-  let
-    filepath = appCacheDir() / filename
-  if not fileExists filepath:
-    echo &"(downloading...)"
-    syncDownload(url, filepath)
-  else:
-    echo "(using cached installer)"
-  filepath.copyFileToDir destination
-
 proc tarxUncompress(filepath, dstpath: string) =
   if not ".tar .gz .taz .tgz .bz2 .xz".split.anyIt(filepath.endsWith it):
     writeError("Error: ", &"Unrecognized compressed type for {filepath}")
@@ -511,11 +588,19 @@ proc uncompress(filepath, dstpath: string) =
       tarxUncompress(osfilepath, osdstpath)
       resulting_file = osdstpath # dir, has no ext
     of ".zip":
+      # extract to "extracted" then `move extracted/* extracted/..`
       try:
-        zipx.extractAll(osfilepath, osdstpath / "bin") # assume extract to bin for zip
+        zipx.extractAll(osfilepath, osdstpath / "extracted") # assume extract to bin for zip
       except ZippyError as e:
-        writeError("Error: ", e.msg)
-        quit(1)
+        if not e.msg.endsWith "already exists":
+          writeError("Error: ", e.msg)
+          quit(1)
+      for item in walkDir(osdstpath / "extracted"):
+        if item.kind in {pcFile,pcLinkToFile}:
+          moveFile(item.path, osdstpath / item.path.extractFilename)
+        elif item.kind in {pcDir,pcLinkToDir}:
+          moveDir(item.path, osdstpath / item.path.extractFilename)
+      removeDir osdstpath / "extracted"
       resulting_file = osdstpath # dir, has no ext
     else:
       writeError("Error: ", &"Unknown file extension '{ext}' of {filename}")
@@ -529,7 +614,7 @@ proc addPathAndEnvvarsFromPath(dirName:string) =
 
   # validate fields
   if not all(@[env.category.len.bool, env.root.len.bool, env.name.len.bool, env.version.len.bool], proc (x:bool): bool = x):
-    writeError("Error: ", &"invalid toml config structure for '{dirName}' (envvars,root,name,bin,version)")
+    writeError("Error: ", &"invalid config structure for '{dirName}' (envvars,root,name,bin,version)")
     quit(1)
   # update PATH
   if env.bin.len.bool:
@@ -549,6 +634,11 @@ proc addPathAndEnvvarsFromPath(dirName:string) =
         newValue = if os.getEnv(key,"").len == 0: newValue else: os.getEnv(key)
       os.putEnv(key, newValue)
 
+import std/strtabs
+proc getEnvVarsFromPath(path: string): StringTableRef =
+  new result
+
+
 proc runAelmSetupCommands(srcEnv: AelmModule) =
   var env = srcEnv
   let replacements = aelmReplacementPairsFromAelmEnv env
@@ -557,8 +647,13 @@ proc runAelmSetupCommands(srcEnv: AelmModule) =
   tasks.applyIt(it.strip)
   addPathAndEnvvarsFromPath(env.root)
   # the tasks that remain are all valid shell commands
-  let cmdstring = tasks.join("; ")
-  let exitCode = execCmdEx(cmdstring, options={poEchoCmd})
+  echo "running setup commands..."
+  for task in tasks: echo task
+  let cmdstring = block:
+    when defined(windows): "cmd /c " & tasks.join(" & ")
+    else: tasks.join("; ")
+  if cmdstring.len == 0: return
+  let exitCode = execCmdEx(cmdstring, options={poEvalCommand})
   if exitCode.exitCode != 0:
     quit(1)
 
@@ -598,8 +693,9 @@ proc runAelmDownloads(srcEnv: AelmModule) =
     filePath = dirPath / filename
     try:
       download(url=dl.url, destination=dirPath, filename=filename)
-    except Exception:
+    except Exception as e:
       writeError("Error: ", &"Failed to download {dl.url}")
+      echo       "       " & e.msg
       quit(1)
     if dl.uncompress:
       uncompress(filePath, dirPath)
@@ -614,7 +710,6 @@ proc removeAelmDownloads(env: AelmModule) =
     except OSError:
       writeError("Error: ",&"Could not remove file after using {filePath}")
 
-# TODO add preferences
 proc addModule(category, version, destination: string, prefer_system: seq[string]) =
   let repo = loadAelmRepo()
   var module = repo.getAelmModule(category=category, version=version)
@@ -676,18 +771,25 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
 
   removeAelmScript module
 
-  # write env activation file
-  # TODO when windows...
-  let replacements = aelmReplacementPairsFromAelmEnv module
-  # have to replace twice (2x) because {bin} can itself have placeholders
   if module.bin.len.bool:
     # module activation
-    let activationFilename = resultingDestination / "activate"
-    let activationContents = ACTIVATE_SCRIPT_LINUX.multiReplace(replacements).multiReplace(replacements)
+    # (have to replace twice (2x) because {bin} can itself have placeholders)
+    let
+      replacements = aelmReplacementPairsFromAelmEnv module
+      activationFilename = resultingDestination / "activate" & ScriptExtension
+      deactivationFilename = resultingDestination / "deactivate" & ScriptExtension
+    when defined(windows):
+      let
+        scriptActivate = ACTIVATE_SCRIPT_WINDOWS
+        scriptDeactivate = DEACTIVATE_SCRIPT_WINDOWS
+    else:
+      let
+        scriptActivate = ACTIVATE_SCRIPT_LINUX
+        scriptDeactivate = DEACTIVATE_SCRIPT_LINUX
+    let activationContents = scriptActivate.multiReplace(replacements).multiReplace(replacements)
     writeFile activationFilename, activationContents
     # module deactivation
-    let deactivationFilename = resultingDestination / "deactivate"
-    let deactivationContents = DEACTIVATE_SCRIPT_LINUX.multiReplace(replacements).multiReplace(replacements)
+    let deactivationContents = scriptDeactivate.multiReplace(replacements).multiReplace(replacements)
     writeFile deactivationFilename, deactivationContents
     # add to user modules if --user enabled
     if userEnabled:
@@ -707,10 +809,16 @@ proc doSearch =
       echo category
       echo versions.join("\n").indent(2)
   elif searchArgs.len >= 1:
-    for arg in searchArgs:
-      if '@' in arg:
+    let query = searchArgs[0]
+    if descriptionEnabled:
+      for category in catvers.keys:
+        if query in cfg[category].description:
+          echo category
+          echo cfg[category].description.indent(2)
+    else:
+      if '@' in query:
         let
-          subargs = arg.split('@')
+          subargs = query.split('@')
           category = subargs[0]
           version = subargs[1]
         echo category
@@ -718,9 +826,10 @@ proc doSearch =
           if knownVersion.startsWith version:
             echo &"  {knownVersion}"
       else: # no version specified
-        let category = arg
-        echo category
-        echo catvers.getOrDefault(category, @[]).join("\n").indent(2)
+        for category in catvers.keys:
+          if query in category:
+            echo category
+            echo catvers.getOrDefault(category, @[]).join("\n").indent(2)
 
 proc doAdd =
   # expect up to 2 arguments
@@ -766,6 +875,7 @@ proc doRemove =
     modules.excl namever
     writeUserInstalledModules modules
 
+  # always remove module dir AFTER updating installed modules above
   try:
     removeDir fullPath
     echo &"removed '{fullPath}'"
@@ -784,13 +894,19 @@ proc doExec =
   let
     envPath = execArgs[0].dup(normalizePath)
     envParentPath = envPath.splitPath.head
-    cmd = execArgs[1..^1].join(" ")
     env = loadAelmModule envPath
+    cmd = block:
+      when not defined(windows): execArgs[1..^1].join(" ")
+      else: "cmd /c " & execArgs[1..^1].join(" ")
   addPathAndEnvvarsFromPath envPath
   for connection in env.connections:
     addPathAndEnvvarsFromPath(envParentPath / connection)
-  let exitCode = execCmd(cmd)
-  quit(exitCode)
+  try:
+    let result = execCmd(cmd)
+    quit(0)
+  except OSError as e:
+    writeError("Error: ", e.msg)
+    quit(1)
 
 proc doConnect =
   if connectArgs.len <= 1:
@@ -873,40 +989,38 @@ const HELPSTR = """
 aelm - Advanced Environment and Language Manager
 
 Usage:
-  aelm {SUBCMD}  [sub-command options & parameters]
-where {SUBCMD} is one of:
-  help [SUBCMD]               print this help, or get help for another SUBCMD
-  list                        list all aelm modules in CWD
-  init                        Initializes an aelm dir in CWD
-  add <envname> [newname]     Add a new environment or language
-  remove <envname@version>    Remove a environment or language
-  search <envname>[@version]  Search environments and languages
-  exec <envdir> <command>     Execute a command in a specified env directory
+  aelm [SUBCMD]  [options & parameters]
+  aelm (no arguments triggers streaming script mode)
+where [SUBCMD] is one of:
+  help [SUBCMD]               (h) print help, or get help for another SUBCMD
+  list                        (ls) list all aelm modules in CWD
+  init                        (i) Downloads repo in CWD
+    --user                    Downloads repo in home dir
+  add <envname> [newname]     (a) Add a new environment or language
+    --prefer-system <name>,   Do not install if <name> exists in PATH
+    --user                    Install in home directory
+  remove <envname@version>    (rm) Remove a environment or language
+    --user                    Remove from home directory
+  search <envname>[@version]  (s) Search environments and languages
+    --description             Search description fields instead of names
+  exec <envdir> <command>     (x) Execute a command in a specified env dir
                               or language module (ex: python --version)
-  connect <env1> <env2>...    Add path and env vars of envdir1 to envdir2
-  disconnect <env1> <env2>... Remove path and env vars of envdir1 from envdir2
-  script <scriptfile>         Processes a set of aelm commands (no `aelm` pfix)
+  connect <env1> <env2>...    (c) Add path and env vars of envdir1 to envdir2
+  disconnect <env1> <env2>... (d) Remove path and envvars of env1 from env2
+  script <scriptfile>         (sc) Runs aelm commands (no `aelm` prefix)
 
-  l        alias list
-  ls       alias list
-  i        alias init
-  a        alias add
-  rm       alias remove
-  s        alias search
-  sc       alias script
-  x        alias exec
-  c        alias connect
-  d        alias disconnect
-  refresh  alias init
+  refresh  alias of init
 
 Options:
-  -h --help       Show this screen.
-  --version       Show version.
-  --clear-cache   Clear the download cache.
+  -h --help       Show this screen
+  --version       Show version
+  --clear-cache   Clear the download cache
 
 Examples:
   aelm add python pylatest
   aelm exec pylatest python --version
+  aelm add nim --user
+  aelm help search
 """
 const HELPADD = """
 add <envname>[@version] [newname] [--prefer-system exename[,...]] [--user]
@@ -957,9 +1071,16 @@ Optionally, list aelm environments in a specific directory other than CWD.
 const HELPINIT = """
 init
 (aliases: refresh)
-Initializes the current working directory as an aelm-capable directory.
-This downloads the latest repository information and stores it locally.
+Downloads the latest repository information and stores it locally as .aelm.yaml
 This file also acts as a flag so you know this is an aelm-capable directory.
+Init is a separate step so you have the option to edit the file to your liking
+or verify what will run.
+
+options:
+  --user
+    Downloads the repository to the home directory
+    %HOME%/.aelm/.aelm.yaml on windows
+    ~/.aelm.aelm.yaml on other systems
 """
 const HELPSEARCH = """
 search <envname>[@version]
@@ -970,6 +1091,10 @@ example:
   aelm search python
   aelm search python@3.10.3
   aelm search python@3
+
+options:
+  --description
+    instead searches the package description field and shows matching descriptions
 """
 const HELPEXEC = """
 exec <envdir> <command>
@@ -1028,6 +1153,7 @@ when isMainModule:
         p.captureArg help: break
         p.captureArg clearTheEntireCache: break
         p.captureArg user: continue
+        p.captureArg description: continue
         p.captureArg preferSystemVersionOfExecutable: continue
         writeError("Error: ",&"Unknown option '{p.key}'")
         quit(1)
@@ -1037,7 +1163,7 @@ when isMainModule:
         p.captureArg list: break
         p.captureArg add: continue
         p.captureArg remove: continue
-        p.captureArg search: break
+        p.captureArg search: continue
         p.captureArg script: break
         p.captureArg exec: break
         p.captureArg connect: break
