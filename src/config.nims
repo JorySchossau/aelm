@@ -20,7 +20,6 @@ when defined(windows):
     quit(1)
 
 elif defined(linux) or defined(osx):
-  switch("gc","refc")
   switch("passC","-flto")
   when defined(m1):
     switch("define", "cputype=arm")
