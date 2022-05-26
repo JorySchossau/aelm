@@ -14,6 +14,7 @@ import terminal
 import macros # updateVarIfKeyOfSameName
 import std/[json, sequtils, strutils, tables, strformat, os, osproc, sets, algorithm, streams]
 from std/os import getHomeDir, createDir
+from puppy import fetch, PuppyError
 from std/rdstdin import readLineFromStdin # for stdin piping
 import yaml/serialization, streams
 from dl import syncDownload
@@ -66,7 +67,7 @@ template captureArg(p:OptParser, command:untyped, control:untyped) {.dirty.} =
 
 ## register all cli arguments
 registerArg(list, nargs = 1, aliases = ["l","ls"])
-registerArg(init, aliases = ["refresh","i"])
+registerArg(init, nargs = -1, aliases = ["refresh","i"])
 registerArg(add, nargs = 2, aliases = ["a"])
 registerArg(remove, nargs = 1, aliases = ["rm"])
 registerArg(search, nargs = 1, aliases = ["s"])
@@ -435,14 +436,6 @@ proc download(url, destination, filename:string; useCache: bool = true, verbose:
     let filepath = destination / filename
     syncDownload(url, filepath)
 
-proc downloadRepoFile =
-  const REPO_URL = "https://github.com/JorySchossau/aelm-packages/releases/download/latest/aelm-repo.yaml"
-  if userEnabled:
-    createDir getHomeDir() / ".aelm"
-    download(url = REPO_URL, destination = getHomeDir()/".aelm", filename = CONF_FILENAME, useCache = false, verbose = false)
-  else:
-    download(url = REPO_URL, destination = getCurrentDir(), filename = CONF_FILENAME, useCache = false, verbose = false)
-
 proc helperLoadAelmRepo(path: string): AelmRepo =
   var stream: FileStream
   try:
@@ -456,11 +449,38 @@ proc helperLoadAelmRepo(path: string): AelmRepo =
     close stream
 
 proc doInit =
-  let filePath = block:
+  const MAIN_REPO_URL = "https://github.com/JorySchossau/aelm-packages/releases/download/latest/aelm-repo.yaml"
+  var filePath = block:
     if userEnabled: getHomeDir() / ".aelm" / CONF_FILENAME
     else: getCurrentDir() / CONF_FILENAME
-  echo "downloading repository to " & filePath
-  downloadRepoFile()
+  # main repo
+  echo &"creating repository file {filePath}"
+  echo &"fetching main repository {MAIN_REPO_URL}"
+  var contents: string
+  try:
+    contents = fetch(MAIN_REPO_URL)
+    filePath.writeFile contents
+  except PuppyError as e:
+    echo e.msg
+    quit(1)
+  # user repos
+  var file: File
+  for url in initArgs:
+    echo &"fetching {url}"
+    try:
+      if url.toLower.startsWith "http": contents = fetch(url)
+      else: contents = readFile url
+
+      file = open(filePath, fmAppend)
+      file.write contents
+    except PuppyError as e:
+      echo e.msg
+      quit(1)
+    except IOError as e:
+      echo e.msg
+      quit(1)
+    finally:
+      close file
   let repo = helperLoadAelmRepo filePath
   echo &"{repo.keys.toSeq.len} items in new repository"
 
@@ -653,10 +673,10 @@ proc runAelmSetupCommands(srcEnv: AelmModule) =
   # the tasks that remain are all valid shell commands
   echo "running setup commands..."
   for task in tasks: echo task
-  if tasks.len == 0: return
   let cmdstring = block:
     when defined(windows): "powershell -c " & tasks.join("; ")
     else: tasks.join("; ")
+  if cmdstring.len == 0: return
   let result = execCmdEx(cmdstring, workingDir=env.root, options={poEvalCommand})
   if result.exitCode != 0:
     echo result.output
