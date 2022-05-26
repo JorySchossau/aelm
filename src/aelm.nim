@@ -162,28 +162,28 @@ type
     version {.defaultVal: "".}: string
     root {.defaultVal: "".}: string
     connections {.defaultVal: @[].}: seq[string] # used only in module config
-    aelmscript {.defaultVal: @[].}: seq[string]
+    aelmscript {.defaultVal: "".}: string
     bin {.defaultVal: "".}: string
     unavailable {.defaultVal: "".}: string
     prefer_system {.defaultVal: @[].}: seq[string]
     envvars {.defaultVal: initTable[string, string]().}: Table[string, string]
     downloads {.defaultVal: @[].}: seq[Download]
-    presetup {.defaultVal: @[].}: seq[string]
-    setup {.defaultVal: @[].}: seq[string]
-    postsetup {.defaultVal: @[].}: seq[string]
+    presetup {.defaultVal: "".}: string
+    setup {.defaultVal: "".}: string
+    postsetup {.defaultVal: "".}: string
     description {.defaultVal: "".}: string
   AelmOS = object
     # usual overrides
     root {.defaultVal: "".}: string
-    aelmscript {.defaultVal: @[].}: seq[string]
+    aelmscript {.defaultVal: "".}: string
     bin {.defaultVal: "".}: string
     unavailable {.defaultVal: "".}: string
     prefer_system {.defaultVal: @[].}: seq[string]
     envvars {.defaultVal: initTable[string, string]().}: Table[string, string]
     downloads {.defaultVal: @[].}: seq[Download]
-    presetup {.defaultVal: @[].}: seq[string]
-    setup {.defaultVal: @[].}: seq[string]
-    postsetup {.defaultVal: @[].}: seq[string]
+    presetup {.defaultVal: "".}: string
+    setup {.defaultVal: "".}: string
+    postsetup {.defaultVal: "".}: string
     description {.defaultVal: "".}: string
   AelmVersion = object
     linux {.defaultVal: nil.}: ref AelmOS
@@ -193,29 +193,29 @@ type
     armosx {.defaultVal: nil.}: ref AelmOS
     # usual overrides
     root {.defaultVal: "".}: string
-    aelmscript {.defaultVal: @[].}: seq[string]
+    aelmscript {.defaultVal: "".}: string
     bin {.defaultVal: "".}: string
     unavailable {.defaultVal: "".}: string
     prefer_system {.defaultVal: @[].}: seq[string]
     envvars {.defaultVal: initTable[string, string]().}: Table[string, string]
     downloads {.defaultVal: @[].}: seq[Download]
-    presetup {.defaultVal: @[].}: seq[string]
-    setup {.defaultVal: @[].}: seq[string]
-    postsetup {.defaultVal: @[].}: seq[string]
+    presetup {.defaultVal: "".}: string
+    setup {.defaultVal: "".}: string
+    postsetup {.defaultVal: "".}: string
     description {.defaultVal: "".}: string
   AelmCategory = object
     versions {.defaultVal: initTable[string,AelmVersion]().}: Table[string,AelmVersion]
     # usual overrides
     root {.defaultVal: "".}: string
-    aelmscript {.defaultVal: @[].}: seq[string]
+    aelmscript {.defaultVal: "".}: string
     bin {.defaultVal: "".}: string
     unavailable {.defaultVal: "".}: string
     prefer_system {.defaultVal: @[].}: seq[string]
     envvars {.defaultVal: initTable[string, string]().}: Table[string, string]
     downloads {.defaultVal: @[].}: seq[Download]
-    presetup {.defaultVal: @[].}: seq[string]
-    setup {.defaultVal: @[].}: seq[string]
-    postsetup {.defaultVal: @[].}: seq[string]
+    presetup {.defaultVal: "".}: string
+    setup {.defaultVal: "".}: string
+    postsetup {.defaultVal: "".}: string
     description {.defaultVal: "".}: string
   AelmRepo = Table[string, AelmCategory]
 
@@ -245,12 +245,9 @@ proc aelmReplacementPairsFromAelmEnv(env: AelmModule):auto =
 proc expandPlaceholders(env: var AelmModule) =
   let replacements = aelmReplacementPairsFromAelmEnv env
   env.bin = env.bin.multiReplace(replacements).dup(normalizePath)
-  for line in env.presetup.mitems:
-    line = line.multiReplace(replacements)
-  for line in env.setup.mitems:
-    line = line.multiReplace(replacements)
-  for line in env.postsetup.mitems:
-    line = line.multiReplace(replacements)
+  env.presetup = env.presetup.multiReplace(replacements)
+  env.setup = env.setup.multiReplace(replacements)
+  env.postsetup = env.postsetup.multiReplace(replacements)
   for value in env.envvars.mvalues:
     value = value.multiReplace(replacements).dup(normalizePath)
   for dl in env.downloads.mitems:
@@ -265,7 +262,7 @@ macro updateVars(envA: var untyped, envB: untyped, variables: varargs[untyped]):
       if `envB`.`v`.len.bool: `envA`.`v` = `envB`.`v`
 
 template update(a:var AelmModule, b: untyped) {.dirty.} =
-  updateVars(envA=a, envB=b, bin, root, prefer_system, downloads, presetup, setup, postsetup, envvars, description, unavailable)
+  updateVars(envA=a, envB=b, bin, root, prefer_system, downloads, presetup, setup, postsetup, aelmscript, envvars, description, unavailable)
 
 proc `$`(env: AelmModule): string =
   proc seqStringsToYaml(strings: seq[string], name: string, multiline: bool = true): string =
@@ -312,11 +309,17 @@ root: {env.root}
       if dl.name.len.bool: result.add &"    name: {dl.name}\n"
       if not dl.uncompress: result.add &"    uncompress: {dl.uncompress}\n"
   result.add "\n"
-  if env.presetup.len.bool:   result.add env.presetup.  seqStringsToYaml(name = "presetup")
-  if env.setup.len.bool:      result.add env.setup.     seqStringsToYaml(name = "setup")
-  if env.postsetup.len.bool:  result.add env.postsetup. seqStringsToYaml(name = "postsetup")
-  if env.aelmscript.len.bool: result.add env.aelmscript.seqStringsToYaml(name = "aelmscript")
-  if env.description.len.bool: result.add &"description: |\n{env.description.indent(2)}"
+  if env.presetup.len.bool:
+      if "\n" notin env.presetup: result.add &"presetup: {env.presetup}\n"
+      else: result.add &"presetup: |\n{env.presetup.indent(2)}\n"
+  if env.setup.len.bool:
+      if "\n" notin env.setup: result.add &"setup: {env.setup}\n"
+      else: result.add &"setup: |\n{env.setup.indent(2)}\n"
+  if env.postsetup.len.bool:
+      if "\n" notin env.postsetup: result.add &"postsetup: {env.postsetup}\n"
+      else: result.add &"postsetup: |\n{env.postsetup.indent(2)}\n"
+  if env.aelmscript.len.bool: result.add &"aelmscript: |\n{env.aelmscript.indent(2)}\n"
+  if env.description.len.bool: result.add &"description: |\n{env.description.indent(2)}\n"
 
 proc loadAelmModule(path: string): AelmModule =
   if not dirExists path:
@@ -514,7 +517,9 @@ proc getCategoriesAndVersions(repo: AelmRepo): Table[string, seq[string]]=
 proc getAelmModule(repo: AelmRepo, category, version: string): AelmModule =
   var env: AelmModule
   
-  if category notin repo: writeError("Error: ", &"Not a valid category '{category}'. Options are:\n" & join(repo.keys.toSeq,"\n").indent(2))
+  if category notin repo:
+    writeError("Error: ", &"Not a valid category '{category}'. Options are:\n" & join(repo.keys.toSeq,"\n").indent(2))
+    quit(1)
 
   # first opportunity for configuration variables in config
   env.update repo[category]
@@ -641,41 +646,45 @@ proc runAelmSetupCommands(srcEnv: AelmModule) =
   var env = srcEnv
   let replacements = aelmReplacementPairsFromAelmEnv env
   expandPlaceholders env
-  var tasks = concat(env.presetup, env.setup, env.postsetup)
+  var tasks = splitLines(env.presetup & "\n" & env.setup & "\n" & env.postsetup).toSeq
   tasks.applyIt(it.strip)
+  tasks = tasks.filterIt(it.len.bool)
   addPathAndEnvvarsFromPath(env.root)
   # the tasks that remain are all valid shell commands
   echo "running setup commands..."
   for task in tasks: echo task
   let cmdstring = block:
-    when defined(windows): "cmd /c " & tasks.join(" & ")
+    when defined(windows): "powershell -c " & tasks.join("; ")
     else: tasks.join("; ")
   if cmdstring.len == 0: return
-  let exitCode = execCmdEx(cmdstring, options={poEvalCommand})
-  if exitCode.exitCode != 0:
+  let result = execCmdEx(cmdstring, workingDir=env.root, options={poEvalCommand})
+  if result.exitCode != 0:
+    echo result.output
     quit(1)
+
+proc prepare(command: string): string =
+  if command.startsWith "aelm": return command.replace("aelm", getAppFilename())
+  if command.startsWith "#": return ""
+
+proc runAelmScriptCommands(script: string, workingDir: string = "") =
+  let aelmExe = getAppFilename()
+  for line_i, line in script.splitLines.toSeq:
+    let command = prepare line.strip
+    if command.len == 0: continue
+    let result = execCmdEx(command, workingDir=workingDir)
+    if result.exitCode != 0:
+      writeError("Error: ", &"aelmscript error")
+      echo result.output
+      writeWarning(&"line {line_i+1}: ", &"{line}")
+      writeWarning(&"     {line_i+1}: ", &"({command})")
+      quit(1)
 
 proc runAelmScriptCommands(env: AelmModule) =
   if env.aelmscript.len == 0: return
   let
     replacements = aelmReplacementPairsFromAelmEnv env
-    path = env.root
-    scriptPath = path / ".aelmscript.as"
-    scriptContents = env.aelmscript.join("\n").multiReplace(replacements)
-  writeFile(scriptPath, scriptContents)
-  let exitCode = execCmd(&"cd {path}; {getAppFilename()} script {scriptPath}")
-  if exitCode != 0:
-    writeError("Error: ", &"aelmscript failed. See errors above.")
-    quit(1)
-
-proc removeAelmScript(env: AelmModule) =
-  let
-    path = env.root
-    scriptPath = path / ".aelmscript.as"
-  try:
-    removeFile scriptPath
-  except OSError:
-    writeError("Error: ",&"Could not remove file after using {scriptPath}")
+    script = env.aelmscript.multiReplace(replacements)
+  runAelmScriptCommands(script, env.root)
 
 proc runAelmDownloads(srcEnv: AelmModule) =
   var env = srcEnv
@@ -746,10 +755,10 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
   if (prefer module.prefer_system) or (prefer prefer_system):
     module.bin = "" # passthrough PATH bin var and use system's {exeName}
     module.downloads.setLen 0
-    module.setup.setLen 0
-    module.presetup.setLen 0
-    module.postsetup.setLen 0
-    module.aelmscript.setLen 0
+    module.presetup = ""
+    module.setup = ""
+    module.postsetup = ""
+    module.aelmscript = ""
     module.envvars.clear
     module.description = ""
     writeFile aelmModConfName, $module
@@ -759,6 +768,10 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
 
   expandPlaceholders module
 
+  # seed with our aelm conf
+  if user_enabled: copyFile(getHomeDir() / ".aelm" / CONF_FILENAME, module.root / CONF_FILENAME)
+  else: copyFile(CONF_FILENAME, module.root / CONF_FILENAME)
+
   runAelmDownloads module
 
   runAelmScriptCommands module
@@ -766,8 +779,6 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
   runAelmSetupCommands module
 
   removeAelmDownloads module
-
-  removeAelmScript module
 
   if module.bin.len.bool:
     # module activation
@@ -966,22 +977,17 @@ proc doClearCache =
   if total < 1_024: echo &"{total} MB removed ({filecount} files)"
   else: echo &"{total div 1_024} GB removed ({filecount} files)"
 
-proc doScript =
+proc doScript() =
   # error checking
   if scriptArgs.len < 1:
     writeError("Error: ", &"missing argument for path to script file.")
     quit(1)
-  let scriptPath = scriptArgs[0]
-  if not fileExists scriptPath:
-    writeError("Error: ", &"script file '{scriptPath}' not found.")
+  if not fileExists scriptArgs[0]:
+    writeError("Error: ", &"script file '{scriptArgs[0]}' not found.")
     quit(1)
-  echo &"running aelmscript {scriptPath}"
-  for line_i, line in scriptPath.lines.toSeq:
-    let exitCode = execCmd(&"{getAppFilename()} {line}")
-    if exitCode != 0:
-      writeError("Error: ", &"aelmscript file '{scriptPath}' failed")
-      writeWarning(&"line {line_i+1}: ", &"{line}")
-      quit(1)
+  echo &"running aelmscript {scriptArgs[0]}"
+  let script = scriptArgs[0].readFile
+  runAelmScriptCommands script
 
 const HELPSTR = """
 aelm - Advanced Environment and Language Manager
@@ -1191,15 +1197,11 @@ when isMainModule:
 
   # STDIN piping/streaming mode for aelmscript
   if commandLineParams().len == 0:
+    var script: string
     var line: string
     while true:
       let readOK = readLineFromStdin("", line)
       if not readOK: break # (also ^C or ^D)
       if line.len == 0: continue
-      scriptArgs.add line
-    for line_i, line in scriptArgs:
-      let exitCode = execCmd(&"{getAppFilename()} {line}")
-      if exitCode != 0:
-        writeError("Error: ", &"aelmscript failed")
-        writeWarning(&"line {line_i+1}: ", &"{line}")
-        quit(1)
+      script.add line
+    runAelmScriptCommands script
