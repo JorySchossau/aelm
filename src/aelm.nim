@@ -623,10 +623,19 @@ proc addPathAndEnvvarsFromPath(dirName:string) =
         newValue = if os.getEnv(key,"").len == 0: newValue else: os.getEnv(key)
       os.putEnv(key, newValue)
 
-import std/strtabs
-proc getEnvVarsFromPath(path: string): StringTableRef =
-  new result
+proc getEnvCtorString(env: AelmModule): string =
+  for name,value in env.envvars:
+    when defined(windows):
+      result.add &"set {name}={value}\n"
+    else:
+      result.add &"export {name}=\"{value}\"\n"
 
+proc getEnvDtorString(env: AelmModule): string =
+  for name in env.envvars.keys:
+    when defined(windows):
+      result.add &"set {name}=\n"
+    else:
+      result.add &"export {name}=\n"
 
 proc runAelmSetupCommands(srcEnv: AelmModule) =
   var env = srcEnv
@@ -773,8 +782,8 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
         scriptDeactivate = DEACTIVATE_SCRIPT_WINDOWS
     else:
       let
-        scriptActivate = ACTIVATE_SCRIPT_LINUX
-        scriptDeactivate = DEACTIVATE_SCRIPT_LINUX
+        scriptActivate = ACTIVATE_SCRIPT_LINUX & module.getEnvCtorString
+        scriptDeactivate = DEACTIVATE_SCRIPT_LINUX & module.getEnvDtorString
     let activationContents = scriptActivate.multiReplace(replacements).multiReplace(replacements)
     writeFile activationFilename, activationContents
     # module deactivation
