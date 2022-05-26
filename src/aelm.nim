@@ -17,6 +17,7 @@ from std/os import getHomeDir, createDir
 from puppy import fetch, PuppyError
 from std/rdstdin import readLineFromStdin # for stdin piping
 import yaml/serialization, streams
+from yaml import YamlParserError, YamlLoadingError
 from dl import syncDownload
 from std/sugar import dup, collect, `=>`
 import zstd/decompress as zstdx
@@ -75,6 +76,7 @@ registerArg(exec, nargs = -1, aliases = ["x"])
 registerArg(connect, nargs = -1, aliases = ["c"])
 registerArg(disconnect, nargs = -1, aliases = ["d"])
 registerArg(script, nargs = 1, aliases = ["sc"])
+registerArg(package, nargs = 2, aliases = ["pkg","p"])
 # I'm using long names and not advertising them in the help
 # instead I'm relying on their aliases, which can contain '-'
 # OPTIONS
@@ -334,8 +336,17 @@ proc loadAelmModule(path: string): AelmModule =
     var stream = newFileStream(path / CONF_MOD_FILENAME, fmRead)
     stream.load module
     close stream
-  except [IOError]:
+  except IOError:
+    writeError("Error: ", &"unable to read file '{path / CONF_MOD_FILENAME}'")
+  except YamlConstructionError as e:
     writeError("Error: ", &"invalid yaml config structure for '{path / CONF_MOD_FILENAME}'")
+    echo &"\nat or before line {e.mark.line}"
+    writeWarning(&"{e.mark.line}:  {e.lineContent}")
+    quit(1)
+  except YamlLoadingError as e:
+    writeError("Error: ", &"unable to load yaml for '{path / CONF_MOD_FILENAME}'")
+    echo &"\nat or before line {e.mark.line}"
+    writeWarning(&"{e.mark.line}:  {e.lineContent}")
     quit(1)
   return module
 
@@ -442,8 +453,18 @@ proc helperLoadAelmRepo(path: string): AelmRepo =
     stream = newFileStream(path, fmRead)
     stream.load result
     close stream
-  except [IOError]:
-    writeError("Error: ", &"invalid yaml structure for '{CONF_FILENAME}'")
+  except IOError:
+    writeError("Error: ", &"unable to access file '{CONF_FILENAME}'")
+    quit(1)
+  except YamlParserError as e:
+    writeError("Error: ", &"invalid or unexpected yaml in '{CONF_FILENAME}'")
+    echo &"\nat or before line {e.mark.line}"
+    writeWarning(&"{e.mark.line}:  {e.lineContent}")
+    quit(1)
+  except YamlLoadingError as e:
+    writeError("Error: ", &"invalid or unexpected yaml in '{CONF_FILENAME}'")
+    echo &"\nat or before line {e.mark.line}"
+    writeWarning(&"{e.mark.line}:  {e.lineContent}")
     quit(1)
   finally:
     close stream
@@ -1009,8 +1030,135 @@ proc doScript() =
   let script = scriptArgs[0].readFile
   runAelmScriptCommands script
 
+proc doCreatePackage =
+  const contentTemplate = """
+# required is to fully specify at least 1 configuration
+# but hopefully you can support multiple OS
+# $name:
+#   versions:
+#     1.0:
+#       linux:
+#       windows:
+#       osx:
+#       armlinux:
+#       armosx:
+#     2.0:
+#       linux:
+#       windows:
+#       osx:
+#       armlinux:
+#       armosx:
+#     ...
+
+$name:
+  description: |
+    "The description is usually a quote from the software website,
+     followed by an attribution of the software site & quote location."
+    - https://some/place
+  versions:
+    # template only inclues a single version, but you can have many
+    1.0:
+      # template only includes a single OS, but you can and should
+      # define the following (linux, windows, osx, armlinux, armosx)
+      # where arm is assumed to be aarch64 / M1.
+      linux:
+        # typically a package will download a binary
+        # release specific to each operating system
+        # we can automatically uncompress most compressed files
+        downloads: # optional
+          - url: https://filesamples.com/samples/document/txt/sample1.txt # required
+            name: dl-test-file.txt # optional 
+            uncompress: false # optional (default true)
+          - url: https://filesamples.com/samples/document/txt/sample2.txt
+          # ...
+        # presetup, setup, postsetup are all command strings
+        # that can perform detailed work after the downloads
+        # they are split into 3 to allow some being shared
+        # by multiple configurations.
+        presetup: | # optional
+          echo touch some_file.txt
+          echo cp some_file.txt another_file.txt
+        setup: | # optional
+          echo wc -l some_file.txt > third_file.txt
+        postsetup: echo rm *file.txt # optional
+
+        # optional
+        # bin is where the executables are you can
+        # call on the command line.
+        # {root} will be expanded to the location
+        # of the package. yaml strings cannot start
+        # unquoted with { so this is a quoted string.
+        bin: '{root}/bin' # any sublocation, even '{root}'
+
+        # optional
+        # these are non-system-'PATH' environment variables required by the package
+        # Usually we want to find out how to set these so that
+        # the package operates truly self-contained within its
+        # directory, not putting files all across the system.
+        # Var names ending in PATH will be concatenated correctly.
+        # with existing values.
+        # Note more keyword expansions.
+        # Valid keywords are:
+        #   root - location of package
+        #   cwd - current working directory at time of call
+        #   name - name of the package (top-level key)
+        #   version - version of package (version key)
+        #   bin - the bin string from above
+        envvars:
+          PACKAGEHOME: '{root}/python'
+          PACKAGESEARCH: '{cwd}'
+
+        # optional
+        # will not download or run any commands if any of
+        # the following executables exist on the system on PATH
+        # do not include the '.exe'
+        prefer_system: [python, python3]
+
+        # optional
+        # a series of aelm commands
+        # optionally mixed in with shell commands
+        # windows support is provided by powershell
+        # so you can use standard posix-style commands
+        # and forward slash pathing
+        aelmscript: |
+          aelm add python py
+          aelm add zig cpp
+          aelm connect cpp py
+          echo "you can now use python modules that require a c++ compiler"
+
+# lastly, all optional fields can be specified at a higher scope
+# and will percolate to the other versions or OS configurations
+# and you can override them. This only saves typing.
+"""
+  let name = packageArgs[1]
+  let content = contentTemplate % ["name", name]
+  fmt"{getCurrentDir() / name}.aelm.yaml".writeFile content
+  writeSuccess("Created package ", &"{getCurrentDir() / name}.aelm.yaml")
+
+proc doVerifyPackage =
+  let name = packageArgs[1]
+  let path = getCurrentDir() / name
+  if not fileExists path:
+    writeError("Error: ", &"No file named '{name}'")
+    quit(1)
+  let env = helperLoadAelmRepo path 
+  writeSuccess("Package OK")
+
+proc doPackage =
+  if packageArgs.len < 2:
+    writeError("Error: ", &"expected 2 arguments for package command.")
+    echo "       aelm package create <name>"
+    echo "       aelm package verify <name>"
+    quit(1)
+  case packageArgs[0].toLower:
+    of "create","new","c","n": doCreatePackage()
+    of "verify","ver","v","check","chk": doVerifyPackage()
+    else:
+      writeError("Error: ", &"Unknown package subcommand '{packageArgs[0]}'")
+      quit(1)
+
 const HELPSTR = """
-aelm - Advanced Environment and Language Manager
+aelm - Adequate Environment and Language Manager
 
 Usage:
   aelm [SUBCMD]  [options & parameters]
@@ -1032,6 +1180,9 @@ where [SUBCMD] is one of:
   connect <env1> <env2>...    (c) Add path and env vars of envdir1 to envdir2
   disconnect <env1> <env2>... (d) Remove path and envvars of env1 from env2
   script <scriptfile>         (sc) Runs aelm commands (no `aelm` prefix)
+  package                     (pkg,p)
+    create <name>             (c,new,n) Create new blank package template
+    verify <name>             (ver,v) Verify package integrity and syntax
 
   refresh  alias of init
 
@@ -1048,6 +1199,7 @@ Examples:
 """
 const HELPADD = """
 add <envname>[@version] [newname] [--prefer-system exename[,...]] [--user]
+(aliases: a)
 Add a new environment or language named <envname>
 optionally of version @version.
 
@@ -1075,6 +1227,7 @@ options:
 """
 const HELPREMOVE = """
 remove <envname> [--user]
+(aliases: rm)
 Removes an environment or languaged named <envname>
 
 example:
@@ -1089,12 +1242,13 @@ options:
 """
 const HELPLIST = """
 list [directory]
+(aliases: ls)
 Lists all the aelm environments and languages in the current working directory.
 Optionally, list aelm environments in a specific directory other than CWD.
 """
 const HELPINIT = """
 init
-(aliases: refresh)
+(aliases: refresh, i)
 Downloads the latest repository information and stores it locally as .aelm.yaml
 This file also acts as a flag so you know this is an aelm-capable directory.
 Init is a separate step so you have the option to edit the file to your liking
@@ -1105,9 +1259,12 @@ options:
     Downloads the repository to the home directory
     %HOME%/.aelm/.aelm.yaml on windows
     ~/.aelm.aelm.yaml on other systems
+
+  alias i
 """
 const HELPSEARCH = """
 search <envname>[@version]
+(aliases: s)
 search the repository for an environment or language,
 optionally for a specific version.
 
@@ -1122,6 +1279,7 @@ options:
 """
 const HELPEXEC = """
 exec <envdir> <command>
+(aliases: x)
 Executes the command <command> in the environment <envdir>
 
 example:
@@ -1131,6 +1289,7 @@ example:
 """
 const HELPCONNECT = """
 connect <srcEnvDir> <targetEnvDir...>
+(aliases: c)
 Adds the exec path and env vars of <srcEnvDir> to <targetEnvDir>s, persistently.
 
 example:
@@ -1145,6 +1304,7 @@ Note: you can only connect environments that share the same aelm initialization
 """
 const HELPDISCONNECT = """
 disconnect <srEnvDir> <targetEnvDir...>
+(aliases: d)
 Removes the exec path and env vars of <srcEnvDir> from <targetEnvDir>s, persistently.
 
 example:
@@ -1153,6 +1313,35 @@ example:
 Disables mynim and myzig from "seeing" the python environment.
 Technically, the path and env vars of python are removed from
 the other environments.
+"""
+const HELPSCRIPT = """
+script <file>
+(aliases sc)
+Runs a collection of aelm commands in <file>, 1 per line.
+This file can also contain system commands, 1 per line
+in standard posix /forward/slash format for paths.
+Windows compatibility relies on PowerShell (included since win7)
+
+example:
+  aelm script project-setup.as
+
+project-setup.as contents:
+aelm add python py
+aelm add zig cpp
+aelm connect cpp py
+aelm exec py python --version
+"""
+const HELPPACKAGE = """
+aelm package (create|verify) <name>
+(aliases: pkg, p)
+
+aelm package create <name>
+(create aliases: c, new, n)
+Creates a template aelm package named <name>.aelm.yaml
+
+aelm package verify <name>
+(verify aliases: ver, v, check, chk)
+Attempts to load <name> as a package, inspecting for problems.
 """
 const HELP_INDEX = {
   "":HELPSTR,
@@ -1188,10 +1377,11 @@ when isMainModule:
         p.captureArg add: continue
         p.captureArg remove: continue
         p.captureArg search: continue
-        p.captureArg script: break
         p.captureArg exec: break
         p.captureArg connect: break
         p.captureArg disconnect: break
+        p.captureArg script: break
+        p.captureArg package: break
         writeError("Error: ",&"Unknown command '{p.key}'")
         quit(1)
   if helpEnabled:
@@ -1214,6 +1404,7 @@ when isMainModule:
   if disconnectEnabled: doDisconnect()
   if clearTheEntireCacheEnabled: doClearCache()
   if scriptEnabled: doScript()
+  if packageEnabled: doPackage()
 
   # STDIN piping/streaming mode for aelmscript
   if commandLineParams().len == 0:
