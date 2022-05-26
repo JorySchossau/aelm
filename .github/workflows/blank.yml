@@ -41,6 +41,140 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: aelm.exe
-          asset_name: windows
-          tag: latest
+          asset_name: aelm.exe
+          tag: latest-win-x86_64
+          overwrite: true
+  build-linux:
+    runs-on: ubuntu-latest
+    container:
+      image: centos:7 #centos/devtoolset-7-toolchain-centos7
+    if: contains(github.event.head_commit.message, 'please release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildlin == 'true')
+    steps:
+      - uses: actions/checkout@v3
+      - name: Load cached system packages
+        id: cache-rpm
+        uses: actions/cache@v2
+        with:
+          path: |
+            /var/cache/yum/x86_64/7/base/packages
+          key: centos7packages
+      - name: Install DevTools
+        run: |
+          yum install gcc autoconf automake make binutils glibc glibc-devel glibc-static git -y
+      - name: download nim source
+        run: |
+          git clone --depth=1 -b v1.6.6 https://github.com/nim-lang/nim
+          echo "NIM_TAG=$(git --git-dir nim/.git tag -l)" >> $GITHUB_ENV
+      - name: inspect nim version
+        run: |
+          echo "nim version: $NIM_TAG"
+      - name: Load cached nim compiler
+        id: cache-nim
+        uses: actions/cache@v2
+        with:
+          path: |
+            nim/bin
+          key: ${{ runner.os }}-${{ env.NIM_TAG }}v2
+      - name: compile nim
+        if: steps.cache-nim.outputs.cache-hit != 'true'
+        run: |
+          cd nim
+          git clone --depth=1 https://github.com/nim-lang/csources_v1
+          cd csources_v1
+          bash build.sh
+          cd ..
+          bin/nim c -d:release koch
+          ./koch boot -d:release
+          ./koch nimble
+          cd ..
+      - name: init-nim
+        run: |
+          echo "${PWD}/.nimble/bin" >> $GITHUB_PATH
+          echo "${PWD}/nim/bin" >> $GITHUB_PATH
+      - name: check-versions
+        run: |
+          nim -v
+      - name: build
+        run: nimble build -y
+      - name: Run UPX
+        uses: crazy-max/ghaction-upx@v1
+        with:
+          version: latest
+          files: ./aelm
+          args: --best -q
+      - name: Upload Linux Binary
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: aelm
+          asset_name: aelm
+          tag: latest-linux-x86_64
+          overwrite: true
+  build-mac:
+    runs-on: macos-latest
+    if: contains(github.event.head_commit.message, 'please release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildosx == 'true')
+    steps:
+      - uses: actions/checkout@v2
+      - name: download nim source
+        run: |
+          git clone --depth=1 -b v1.6.6 https://github.com/nim-lang/nim
+          echo "NIM_TAG=$(git --git-dir nim/.git tag -l)" >> $GITHUB_ENV
+      - name: inspect nim version
+        run: |
+          echo "nim version: $NIM_TAG"
+      - name: Load cached nim compiler
+        id: cache-nim
+        uses: actions/cache@v2
+        with:
+          path: |
+            nim/bin
+          key: ${{ runner.os }}-${{ env.NIM_TAG }}
+      - name: compile nim
+        if: steps.cache-nim.outputs.cache-hit != 'true'
+        run: |
+          cd nim
+          git clone --depth=1 https://github.com/nim-lang/csources_v1
+          cd csources_v1
+          bash build.sh
+          cd ..
+          bin/nim c -d:release koch
+          ./koch boot -d:release
+          ./koch nimble
+          cd ..
+      - name: init-nim
+        run: |
+          echo "${PWD}/.nimble/bin" >> $GITHUB_PATH
+          echo "${PWD}/nim/bin" >> $GITHUB_PATH
+      - name: check-versions
+        run: |
+          nim -v
+      - name: Install Dependencies
+        run: |
+          nimble install yaml -y
+          nimble install zstd -y
+          nimble install zippy -y
+      - name: Build package
+        run: |
+          rm src/config.nims
+          echo "building x86_64 target..."
+          sudo xcode-select --switch /Applications/Xcode_11.7.app
+          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx10.15 --show-sdk-platform-version)" >> $GITHUB_ENV
+          echo "SDKROOT=$(xcrun -sdk macosx10.15 --show-sdk-path)" >> $GITHUB_ENV
+          nim c -o:aelm.x64 -d:cputype=x86_64 -d:release -d:danger --stackTrace -t:-flto --opt:size --panics:on -l:"-target x86_64-apple-macos10.13" -t:"-target x86_64-apple-macos10.13" src/aelm
+          strip aelm.x64
+          echo "building arm64 target..."
+          sudo xcode-select --switch /Applications/Xcode_12.4.app
+          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.1 --show-sdk-platform-version)" >> $GITHUB_ENV
+          echo "SDKROOT=$(xcrun -sdk macosx11.1 --show-sdk-path)" >> $GITHUB_ENV
+          nim c -o:aelm.arm64 -d:cputype=arm -d:release -d:danger --stackTrace -t:-flto --opt:size --panics:on -l:"-target arm64-apple-macos11.1" -t:"-target arm64-apple-macos11.1" src/aelm
+          strip aelm.arm64
+          echo "building universal executable..."
+          lipo -create -output aelm aelm.arm64 aelm.x64
+      - name: Upload OSX Binary
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: aelm
+          asset_name: aelm
+          tag: latest-osx-x86_64
           overwrite: true
