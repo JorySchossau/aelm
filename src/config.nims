@@ -3,10 +3,12 @@ mode = ScriptMode.Silent
 switch("define","release")
 switch("define","danger")
 switch("stackTrace") # better bug reports for +20kB
-switch("gc","arc")
+#switch("gc","arc")
+switch("define","useMalloc")
 switch("define","ssl")
 switch("opt","size")
 switch("passL","-s")
+switch("panics")
 
 setCommand "c"
 
@@ -18,6 +20,7 @@ when defined(windows):
     quit(1)
 
 elif defined(linux) or defined(osx):
+  switch("gc","refc")
   switch("passC","-flto")
   if   buildCPU == "amd64": switch("define", "cputype=x86_64")
   elif buildCPU == "arm64": switch("define", "cputype=arm")
