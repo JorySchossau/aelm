@@ -7,13 +7,10 @@ when not defined(debug):
   switch("define","release")
   switch("define","danger")
   switch("stackTrace") # better bug reports for +20kB
-#switch("gc","arc")
-  switch("define","useMalloc")
+  #switch("define","useMalloc")
   switch("opt","size")
   switch("passL","-s")
   switch("panics")
-  if defined(linux) or defined(osx):
-    switch("passC","-flto")
 
 when defined(windows):
   switch("cc","vcc")
