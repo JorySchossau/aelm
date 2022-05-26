@@ -22,7 +22,9 @@ when defined(windows):
 elif defined(linux) or defined(osx):
   switch("gc","refc")
   switch("passC","-flto")
-  if   buildCPU == "amd64": switch("define", "cputype=x86_64")
+  when defined(m1):
+    switch("define", "cputype=arm")
+  elif buildCPU == "amd64": switch("define", "cputype=x86_64")
   elif buildCPU == "arm64": switch("define", "cputype=arm")
   else:
     echo "OS " & buildCPU & " not supported"
