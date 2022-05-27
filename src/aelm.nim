@@ -688,7 +688,7 @@ proc runAelmSetupCommands(srcEnv: AelmModule) =
   expandPlaceholders env
   var tasks = splitLines(env.presetup & "\n" & env.setup & "\n" & env.postsetup).toSeq
   tasks.applyIt(it.strip)
-  tasks = tasks.filterIt(it.len.bool)
+  tasks = tasks.filterIt(it.len.bool).filterIt(not it.startsWith "#")
   addPathAndEnvvarsFromPath(env.root)
   # the tasks that remain are all valid shell commands
   echo "running setup commands..."

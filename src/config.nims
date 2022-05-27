@@ -2,7 +2,6 @@ mode = ScriptMode.Silent
 
 setCommand "c"
 
-switch("define","ssl")
 when not defined(debug):
   switch("define","release")
   switch("define","danger")
