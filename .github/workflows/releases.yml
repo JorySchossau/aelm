@@ -177,27 +177,69 @@ jobs:
           tag: latest-osx-x86_64-and-aarch64
           overwrite: true
   build-linux-aarch64:
-    runs-on: ubuntu18.04
+    runs-on: ubuntu-latest
+    container:
+      image: centos:7 #centos/devtoolset-7-toolchain-centos7
     if: contains(github.event.head_commit.message, 'please release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildlinaarch64 == 'true')
     steps:
       - uses: actions/checkout@v2
+      - name: Install DevTools
+        run: |
+          yum install gcc autoconf automake make binutils glibc glibc-devel glibc-static git -y
+      - name: download nim source
+        run: |
+          git clone --depth=1 -b v1.6.6 https://github.com/nim-lang/nim
+          echo "NIM_TAG=$(git --git-dir nim/.git tag -l)" >> $GITHUB_ENV
+      - name: inspect nim version
+        run: |
+          echo "nim version: $NIM_TAG"
+      - name: Load cached nim compiler
+        id: cache-nim
+        uses: actions/cache@v2
+        with:
+          path: |
+            nim/bin
+            zig
+            ${PWD}/.nimble
+          key: ${{ runner.os }}-${{ env.NIM_TAG }}v2
+      - name: compile nim
+        if: steps.cache-nim.outputs.cache-hit != 'true'
+        run: |
+          cd nim
+          git clone --depth=1 https://github.com/nim-lang/csources_v1
+          cd csources_v1
+          bash build.sh
+          cd ..
+          bin/nim c -d:release koch
+          ./koch boot -d:release
+          ./koch nimble
+          cd ..
+      - name: init-nim
+        run: |
+          echo "${PWD}/.nimble/bin" >> $GITHUB_PATH
+          echo "${PWD}/nim/bin" >> $GITHUB_PATH
+      - name: Test Nim
+        run: nim -v
       - name: Configure Zig
+        if: steps.cache-nim.outputs.cache-hit != 'true'
         run: |
           curl -ozig.tar.xz -L "https://ziglang.org/download/0.9.1/zig-linux-x86_64-0.9.1.tar.xz"
-          tar x zig.tar.xz
+          tar xf zig.tar.xz
           mv zig-linux-x86_64-0.9.1 zig
           echo "#!/bin/env sh" > zig/gcc
-          echo "$PWD/zig/zig cc -target aarch64-linux-gnu $@" >> zig/gcc
+          echo "$PWD/zig/zig cc -target aarch64-linux-gnu \$@" >> zig/gcc
           chmod +x zig/gcc
-      - name: Build Aelm
+      - name: Nimble Deps
+        if: steps.cache-nim.outputs.cache-hit != 'true'
         run: |
-          rm src/config.nims
           nimble install yaml -y
           nimble install zstd -y
           nimble install zippy -y
           nimble install puppy -y
-          nim c -d:release -d:danger --opt:size --cpu:arm64 --os:linux -d:cputype=arm --arm64.linux.gcc.exe=zig/gcc --arm64.linux.gcc.linkerexe=zig/gcc -o:aelm src/aelm.nim
-          strip aelm
+      - name: Build Aelm
+        run: |
+          rm src/config.nims
+          nim c -d:release -d:danger -l:-s --opt:size --cpu:arm64 --os:linux -d:cputype=arm --arm64.linux.gcc.exe=zig/gcc --arm64.linux.gcc.linkerexe=zig/gcc -o:aelm src/aelm.nim
       - name: Run UPX
         uses: crazy-max/ghaction-upx@v1
         with:
