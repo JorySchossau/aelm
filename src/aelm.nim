@@ -433,9 +433,8 @@ proc appCacheDir: string =
   createDir cacheDir
   return cacheDir
 
-proc download(url, destination, filename:string; useCache: bool = true, verbose: bool = true) =
+proc download(url, destination, filename:string; useCache: bool = true) =
   # returns full path to downloaded file (or cached file)
-  if verbose: echo &"downloading {url}"
   if useCache:
     let filepath = appCacheDir() / filename
     if not fileExists filepath:
