@@ -306,8 +306,8 @@ root: {env.root}
   result.add "\n# End of settings that still have an effect on this module."
   result.add "\n# The below information is included as a record of this module's origin.\n"
   if env.downloads.len.bool:
+    result.add "\ndownloads:\n"
     for dl in env.downloads:
-      result.add "\ndownloads:\n"
       result.add &"  - url: {dl.url}\n"
       if dl.name.len.bool: result.add &"    name: {dl.name}\n"
       if not dl.uncompress: result.add &"    uncompress: {dl.uncompress}\n"
