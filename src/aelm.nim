@@ -695,7 +695,7 @@ proc runAelmSetupCommands(srcEnv: AelmModule) =
   for task in tasks: echo task
   if tasks.len == 0: return
   let cmdstring = block:
-    when defined(windows): "powershell -c " & tasks.join("; ")
+    when defined(windows): "powershell -c \"" & tasks.join("; ") & "\""
     else: tasks.join("; ")
   let result = execCmdEx(cmdstring, workingDir=env.root, options={poEvalCommand})
   if result.exitCode != 0:
