@@ -156,14 +156,14 @@ jobs:
           sudo xcode-select --switch /Applications/Xcode_11.7.app
           echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx10.15 --show-sdk-platform-version)" >> $GITHUB_ENV
           echo "SDKROOT=$(xcrun -sdk macosx10.15 --show-sdk-path)" >> $GITHUB_ENV
-          nimble build -l:"-target x86_64-apple-macos10.13" -t:"-target x86_64-apple-macos10.13"
+          nimble build --passL:"'-target x86_64-apple-macos10.13'" --passC:"'-target x86_64-apple-macos10.13'" -y
           strip aelm
           mv aelm aelm.x64
           echo "building arm64 target..."
           sudo xcode-select --switch /Applications/Xcode_12.4.app
           echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.1 --show-sdk-platform-version)" >> $GITHUB_ENV
           echo "SDKROOT=$(xcrun -sdk macosx11.1 --show-sdk-path)" >> $GITHUB_ENV
-          nimble build -d:m1 -l:"-target arm64-apple-macos11.1" -t:"-target arm64-apple-macos11.1"
+          nimble build -d:m1 --passL:"'-target arm64-apple-macos11.1'" --passC:"'-target arm64-apple-macos11.1'" -y
           strip aelm
           mv aelm aelm.arm64
           echo "building universal executable..."
@@ -174,7 +174,7 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: aelm
           asset_name: aelm
-          tag: latest-osx-x86_64; latext-osx-aarch64 (M1)
+          tag: latest-osx-x86_64-and-aarch64
           overwrite: true
   build-linux-aarch64:
     runs-on: ubuntu20.04
