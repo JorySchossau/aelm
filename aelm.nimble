@@ -11,6 +11,11 @@ bin           = @["aelm"]
 # Dependencies
 requires "nim >= 1.6.4"
 requires "yaml >= 0.16.0"
-requires "zstd >= 0.5.0"
+
+## zstd is broken for cross-platform builds (mingw)
+## Awaiting my PR to be accepted...
+#requires "zstd >= 0.5.0"
+requires "https://github.com/joryschossau/nim_zstd#fix-mingw-cross-compile"
+
 requires "zippy >= 0.9.7"
 requires "puppy >= 1.5.3"
