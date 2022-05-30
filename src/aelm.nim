@@ -97,9 +97,8 @@ const
       ""
 
 const ACTIVATE_SCRIPT_LINUX = """
-## {name} environment setup
 case ":${PATH}:" in
-  *:"{bin}":*)
+  *:"{bin}:"*)
     ;;
   *)
     ## prepend the path to be safe
@@ -108,9 +107,8 @@ case ":${PATH}:" in
 esac
 """
 const DEACTIVATE_SCRIPT_LINUX = """
-## {name} environment setup
 case ":${PATH}:" in
-  *:"{bin}":*)
+  *:"{bin}:"*)
     ## remove the path
     substr="{bin}:"
     export PATH=${PATH/${substr}/}
@@ -122,16 +120,12 @@ esac
 const ACTIVATE_SCRIPT_WINDOWS = """
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-
-rem {name} environment setup
-
 set "substr={bin};"
 echo.!PATH! | findstr /C:"{bin};" 1>nul
 if errorlevel 1 (
   rem not found in path. add to path.
   set NEWPATH=!substr!!PATH!
 ) else (
-  set "NEWPATH=!PATH!"
   rem do nothing / already activated
 )
 endlocal & path %NEWPATH%
@@ -139,17 +133,13 @@ endlocal & path %NEWPATH%
 const DEACTIVATE_SCRIPT_WINDOWS = """
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-
-rem {name} environment setup
-
 set "substr={bin};"
 echo.!PATH! | findstr /C:"{bin};" 1>nul
 if errorlevel 1 (
   rem do nothing. no module in path.
-  set "NEWPATH=!PATH!"
 ) else (
   rem found in path. remove from path.
-  set "NEWPATH=!PATH:%substr%=!"
+  set NEWPATH=!PATH:%substr%=!
 )
 endlocal & path %NEWPATH%
 """
@@ -167,7 +157,7 @@ type
     root {.defaultVal: "".}: string
     connections {.defaultVal: @[].}: seq[string] # used only in module config
     aelmscript {.defaultVal: "".}: string
-    bin {.defaultVal: "".}: string
+    bins {.defaultVal: @[].}: seq[string]
     unavailable {.defaultVal: "".}: string
     prefer_system {.defaultVal: @[].}: seq[string]
     envvars {.defaultVal: initTable[string, string]().}: Table[string, string]
@@ -180,7 +170,7 @@ type
     # usual overrides
     root {.defaultVal: "".}: string
     aelmscript {.defaultVal: "".}: string
-    bin {.defaultVal: "".}: string
+    bins {.defaultVal: @[].}: seq[string]
     unavailable {.defaultVal: "".}: string
     prefer_system {.defaultVal: @[].}: seq[string]
     envvars {.defaultVal: initTable[string, string]().}: Table[string, string]
@@ -198,7 +188,7 @@ type
     # usual overrides
     root {.defaultVal: "".}: string
     aelmscript {.defaultVal: "".}: string
-    bin {.defaultVal: "".}: string
+    bins {.defaultVal: @[].}: seq[string]
     unavailable {.defaultVal: "".}: string
     prefer_system {.defaultVal: @[].}: seq[string]
     envvars {.defaultVal: initTable[string, string]().}: Table[string, string]
@@ -212,7 +202,7 @@ type
     # usual overrides
     root {.defaultVal: "".}: string
     aelmscript {.defaultVal: "".}: string
-    bin {.defaultVal: "".}: string
+    bins {.defaultVal: @[].}: seq[string]
     unavailable {.defaultVal: "".}: string
     prefer_system {.defaultVal: @[].}: seq[string]
     envvars {.defaultVal: initTable[string, string]().}: Table[string, string]
@@ -242,16 +232,16 @@ proc aelmReplacementPairsFromAelmEnv(env: AelmModule):auto =
     ("{cwd}", getCurrentDir()),
     ("{root}", env.root.dup(normalizePath)),
     ("{name}", env.name),
-    ("{bin}", env.bin.dup(normalizePath)),
     ("{version}", env.version),
   ]
 
 proc expandPlaceholders(env: var AelmModule) =
   let replacements = aelmReplacementPairsFromAelmEnv env
-  env.bin = env.bin.multiReplace(replacements).dup(normalizePath)
   env.presetup = env.presetup.multiReplace(replacements)
   env.setup = env.setup.multiReplace(replacements)
   env.postsetup = env.postsetup.multiReplace(replacements)
+  for bin_i in 0..env.bins.high:
+    env.bins[bin_i] = env.bins[bin_i].multiReplace(replacements).multiReplace(replacements).dup(normalizePath)
   for value in env.envvars.mvalues:
     value = value.multiReplace(replacements).dup(normalizePath)
   for dl in env.downloads.mitems:
@@ -266,7 +256,7 @@ macro updateVars(envA: var untyped, envB: untyped, variables: varargs[untyped]):
       if `envB`.`v`.len.bool: `envA`.`v` = `envB`.`v`
 
 template update(a:var AelmModule, b: untyped) {.dirty.} =
-  updateVars(envA=a, envB=b, bin, root, prefer_system, downloads, presetup, setup, postsetup, aelmscript, envvars, description, unavailable)
+  updateVars(envA=a, envB=b, bins, root, prefer_system, downloads, presetup, setup, postsetup, aelmscript, envvars, description, unavailable)
 
 proc `$`(env: AelmModule): string =
   proc seqStringsToYaml(strings: seq[string], name: string, multiline: bool = true): string =
@@ -297,7 +287,7 @@ version: {env.version}
 name: {env.name}
 root: {env.root}
 """
-  if env.bin.len.bool: result.add &"bin: '{env.bin}'\n"
+  if env.bins.len.bool: result.add env.bins.seqStringsToYaml(name = "bins", multiline = false)
   if env.prefer_system.len.bool: result.add env.prefer_system.seqStringsToYaml(name = "prefer_system", multiline = false)
   if env.connections.len.bool: result.add env.connections.seqStringsToYaml(name = "connections", multiline = false)
   if env.envvars.len.bool:
@@ -403,16 +393,18 @@ proc writeUserInstalledModules(modules: HashSet[string]) =
       var module = loadAelmModule path
       let replacements = aelmReplacementPairsFromAelmEnv module
       expandPlaceholders module
-      if module.bin in paths:
-        let index = paths.find module.bin
-        paths.delete index
+      for bin in module.bins:
+        if bin in paths:
+          let index = paths.find bin
+          paths.delete index
     # install new modules
     for moduleName in newModules.toSeq:
       let path = getHomeDir() / ".aelm" / moduleName
       var module = loadAelmModule path
       let replacements = aelmReplacementPairsFromAelmEnv module
       expandPlaceholders module
-      if module.bin notin paths: paths.insert(module.bin, 0)
+      for bin in module.bins:
+        if bin notin paths: paths.insert(bin, 0)
     let pathsAsString = paths.join(";")
     setUnicodeValue(REGISTRY_LOCATION, REGISTRY_KEY, pathsAsString, HKEY_LOCAL_MACHINE)
     echo pathsAsString
@@ -649,14 +641,15 @@ proc addPathAndEnvvarsFromPath(dirName:string) =
 
   # validate fields
   if not all(@[env.category.len.bool, env.root.len.bool, env.name.len.bool, env.version.len.bool], proc (x:bool): bool = x):
-    writeError("Error: ", &"invalid config structure for '{dirName}' (envvars,root,name,bin,version)")
+    writeError("Error: ", &"invalid config structure for '{dirName}' (envvars,root,name,bins,version)")
     quit(1)
   # update PATH
-  if env.bin.len.bool:
-    var newPath = env.bin.dup(normalizePath)
-    newPath.add PathSep
-    newPath.add os.getEnv("PATH","")
-    os.putEnv("PATH", newPath)
+  if env.bins.len.bool:
+    for bin in env.bins:
+      var newPath = bin.dup(normalizePath)
+      newPath.add PathSep
+      newPath.add os.getEnv("PATH","")
+      os.putEnv("PATH", newPath)
   # update ENVVARS
   for key,value in env.envvars:
       # concatenate var contents if variable name ends in PATH
@@ -808,7 +801,7 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
   let aelmModConfName = resultingDestination / CONF_MOD_FILENAME
 
   if (prefer module.prefer_system) or (prefer prefer_system):
-    module.bin = "" # passthrough PATH bin var and use system's {exeName}
+    module.bins = @[] # passthrough PATH bin var and use system's {exeName}
     module.downloads.setLen 0
     module.presetup = ""
     module.setup = ""
@@ -835,26 +828,33 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
 
   removeAelmDownloads module
 
-  if module.bin.len.bool:
+  if module.bins.len.bool:
     # module activation
-    # (have to replace twice (2x) because {bin} can itself have placeholders)
     let
       replacements = aelmReplacementPairsFromAelmEnv module
       activationFilename = resultingDestination / "activate" & ScriptExtension
       deactivationFilename = resultingDestination / "deactivate" & ScriptExtension
+    var
+      scriptActivate = ""
+      scriptDeactivate = ""
     when defined(windows):
-      let
-        scriptActivate = ACTIVATE_SCRIPT_WINDOWS
-        scriptDeactivate = DEACTIVATE_SCRIPT_WINDOWS
+      for bin in module.bins:
+        scriptActivate.add ACTIVATE_SCRIPT_WINDOWS.replace(sub="{bin}", by=bin)
+        scriptDeactivate.add DEACTIVATE_SCRIPT_WINDOWS.replace(sub="{bin}", by=bin)
     else:
-      let
-        scriptActivate = ACTIVATE_SCRIPT_LINUX & module.getEnvCtorString
-        scriptDeactivate = DEACTIVATE_SCRIPT_LINUX & module.getEnvDtorString
-    let activationContents = scriptActivate.multiReplace(replacements).multiReplace(replacements)
-    writeFile activationFilename, activationContents
+      for bin in module.bins:
+        scriptActivate.add ACTIVATE_SCRIPT_LINUX.replace(sub="{bin}", by=bin)
+        scriptDeactivate.add DEACTIVATE_SCRIPT_LINUX.replace(sub="{bin}", by=bin)
+      #let
+      #  scriptActivate = ACTIVATE_SCRIPT_LINUX & module.getEnvCtorString
+      #  scriptDeactivate = DEACTIVATE_SCRIPT_LINUX & module.getEnvDtorString
+    scriptActivate.add module.getEnvCtorString
+    scriptDeactivate.add module.getEnvDtorString
+    #let activationContents = scriptActivate.multiReplace(replacements).multiReplace(replacements)
+    writeFile activationFilename, scriptActivate
     # module deactivation
-    let deactivationContents = scriptDeactivate.multiReplace(replacements).multiReplace(replacements)
-    writeFile deactivationFilename, deactivationContents
+    #let deactivationContents = scriptDeactivate.multiReplace(replacements).multiReplace(replacements)
+    writeFile deactivationFilename, scriptDeactivate
     # add to user modules if --user enabled
     if userEnabled:
       var userModules = readUserInstalledModules()
@@ -1097,12 +1097,12 @@ $name:
         postsetup: echo rm *file.txt # optional
 
         # optional
-        # bin is where the executables are you can
-        # call on the command line.
+        # bins are the locations of important executables
+        # you want to be able to call on the command line.
         # {root} will be expanded to the location
         # of the package. yaml strings cannot start
         # unquoted with { so this is a quoted string.
-        bin: '{root}/bin' # any sublocation, even '{root}'
+        bins: ['{root}/bin'] # any sublocation, even '{root}'
 
         # optional
         # these are non-system-'PATH' environment variables required by the package
@@ -1117,7 +1117,6 @@ $name:
         #   cwd - current working directory at time of call
         #   name - name of the package (top-level key)
         #   version - version of package (version key)
-        #   bin - the bin string from above
         envvars:
           PACKAGEHOME: '{root}/python'
           PACKAGESEARCH: '{cwd}'
