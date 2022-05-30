@@ -143,6 +143,26 @@ if errorlevel 1 (
 )
 endlocal & path %NEWPATH%
 """
+const ACTIVATE_SCRIPT_PS = """
+$env:substr="{bin};"
+if (${env:path}.contains("{bin};")) {
+  # do nothing / already activated
+} else {
+  # not found in path. add to path.
+  ${env:NEWPATH}="${env:substr}${env:path}"
+}
+${env:path}="${env:NEWPATH}"
+"""
+const DEACTIVATE_SCRIPT_PS = """
+$env:substr="{bin};"
+if (${env:path}.contains("{bin};")) {
+  # found in path. remove from path.
+  ${env:NEWPATH}=${env:path}.Replace("{bin};","")
+} else {
+  # do nothing. no module in path.
+}
+${env:path}="${env:NEWPATH}"
+"""
 
 type
   Download = object
@@ -667,19 +687,17 @@ proc addPathAndEnvvarsFromPath(dirName:string) =
         newValue = if os.getEnv(key,"").len == 0: newValue else: os.getEnv(key)
       os.putEnv(key, newValue)
 
-proc getEnvCtorString(env: AelmModule): string =
+proc getEnvCtorString(env: AelmModule, formatstr: string): string =
   for name,value in env.envvars:
-    when defined(windows):
-      result.add &"set {name}={value}\n"
-    else:
-      result.add &"export {name}=\"{value}\"\n"
+      result.add formatstr % [name, value]
+      #result.add &"set {name}={value}\n"
+      #result.add &"export {name}=\"{value}\"\n"
 
-proc getEnvDtorString(env: AelmModule): string =
+proc getEnvDtorString(env: AelmModule, formatstr: string): string =
   for name in env.envvars.keys:
-    when defined(windows):
-      result.add &"set {name}=\n"
-    else:
-      result.add &"export {name}=\n"
+    result.add formatstr % [name]
+      #result.add &"set {name}=\n"
+      #result.add &"export {name}=\n"
 
 proc runAelmSetupCommands(srcEnv: AelmModule) =
   var env = srcEnv
@@ -835,31 +853,43 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
 
   if module.bins.len.bool:
     # module activation
-    let
-      replacements = aelmReplacementPairsFromAelmEnv module
-      activationFilename = resultingDestination / "activate" & ScriptExtension
-      deactivationFilename = resultingDestination / "deactivate" & ScriptExtension
     var
+      replacements = aelmReplacementPairsFromAelmEnv module
+      activationFilename = ""
+      deactivationFilename = ""
       scriptActivate = ""
       scriptDeactivate = ""
     when defined(windows):
+      activationFilename = resultingDestination / "activate" & ".bat"
+      deactivationFilename = resultingDestination / "deactivate" & ".bat"
       for bin in module.bins:
         scriptActivate.add ACTIVATE_SCRIPT_WINDOWS.replace(sub="{bin}", by=bin)
         scriptDeactivate.add DEACTIVATE_SCRIPT_WINDOWS.replace(sub="{bin}", by=bin)
+      scriptActivate.add module.getEnvCtorString("set $#=$#\n")
+      scriptDeactivate.add module.getEnvDtorString("set $#=\n")
+      writeFile activationFilename, scriptActivate
+      writeFile deactivationFilename, scriptDeactivate
+      scriptActivate = ""
+      scriptDeactivate = ""
+      activationFilename = resultingDestination / "activate" & ".ps1"
+      deactivationFilename = resultingDestination / "deactivate" & ".ps1"
+      for bin in module.bins:
+        scriptActivate.add ACTIVATE_SCRIPT_PS.replace(sub="{bin}", by=bin)
+        scriptDeactivate.add DEACTIVATE_SCRIPT_PS.replace(sub="{bin}", by=bin)
+      scriptActivate.add module.getEnvCtorString("$${env:$#}=\"$#\"\n")
+      scriptDeactivate.add module.getEnvDtorString("$${env:$#}=\"\"\n")
+      writeFile activationFilename, scriptActivate
+      writeFile deactivationFilename, scriptDeactivate
     else:
+      activationFilename = resultingDestination / "activate"
+      deactivationFilename = resultingDestination / "deactivate"
       for bin in module.bins:
         scriptActivate.add ACTIVATE_SCRIPT_LINUX.replace(sub="{bin}", by=bin)
         scriptDeactivate.add DEACTIVATE_SCRIPT_LINUX.replace(sub="{bin}", by=bin)
-      #let
-      #  scriptActivate = ACTIVATE_SCRIPT_LINUX & module.getEnvCtorString
-      #  scriptDeactivate = DEACTIVATE_SCRIPT_LINUX & module.getEnvDtorString
-    scriptActivate.add module.getEnvCtorString
-    scriptDeactivate.add module.getEnvDtorString
-    #let activationContents = scriptActivate.multiReplace(replacements).multiReplace(replacements)
-    writeFile activationFilename, scriptActivate
-    # module deactivation
-    #let deactivationContents = scriptDeactivate.multiReplace(replacements).multiReplace(replacements)
-    writeFile deactivationFilename, scriptDeactivate
+      scriptActivate.add module.getEnvCtorString("export $#=\"$#\"\n")
+      scriptDeactivate.add module.getEnvDtorString("export $#=\n")
+      writeFile activationFilename, scriptActivate
+      writeFile deactivationFilename, scriptDeactivate
     # add to user modules if --user enabled
     if userEnabled:
       var userModules = readUserInstalledModules()
