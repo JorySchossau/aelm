@@ -235,6 +235,9 @@ proc aelmReplacementPairsFromAelmEnv(env: AelmModule):auto =
     ("{version}", env.version),
   ]
 
+func normalizePathToWin(path: string): string =
+  return path.replace('/','\\')
+
 proc expandPlaceholders(env: var AelmModule) =
   let replacements = aelmReplacementPairsFromAelmEnv env
   env.presetup = env.presetup.multiReplace(replacements)
@@ -242,8 +245,10 @@ proc expandPlaceholders(env: var AelmModule) =
   env.postsetup = env.postsetup.multiReplace(replacements)
   for bin_i in 0..env.bins.high:
     env.bins[bin_i] = env.bins[bin_i].multiReplace(replacements).multiReplace(replacements).dup(normalizePath)
+    when defined(windows): env.bins[bin_i] = env.bins[bin_i].normalizePathToWin
   for value in env.envvars.mvalues:
     value = value.multiReplace(replacements).dup(normalizePath)
+    when defined(windows): value = value.normalizePathToWin
   for dl in env.downloads.mitems:
     dl.url = dl.url.multiReplace(replacements)
     dl.name = block:
@@ -961,7 +966,8 @@ proc doExec =
     env = loadAelmModule envPath
     cmd = block:
       when not defined(windows): execArgs[1..^1].join(" ")
-      else: "cmd /c " & execArgs[1..^1].join(" ")
+      else: "powershell -c \"" & execArgs[1..^1].join(" ") & "\""
+      #else: "cmd /c "          & execArgs[1..^1].join(" ")
   addPathAndEnvvarsFromPath envPath
   for connection in env.connections:
     addPathAndEnvvarsFromPath(envParentPath / connection)
