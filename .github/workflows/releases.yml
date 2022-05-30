@@ -18,7 +18,7 @@ on:
 jobs:
   build-win:
     runs-on: windows-latest
-    if: contains(github.event.head_commit.message, 'please release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildwin == 'true')
+    if: ${{ contains(github.event.head_commit.message, 'new release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildwin == 'true') }}
     steps:
       - uses: actions/checkout@v3
       - uses: ilammy/msvc-dev-cmd@v1
@@ -43,14 +43,14 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: aelm.exe
-          asset_name: aelm.exe
-          tag: latest-win-x86_64
+          asset_name: aelm-x64.exe
+          tag: latest
           overwrite: true
   build-linux:
     runs-on: ubuntu-latest
     container:
       image: centos:7 #centos/devtoolset-7-toolchain-centos7
-    if: contains(github.event.head_commit.message, 'please release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildlin == 'true')
+    if: ${{ contains(github.event.head_commit.message, 'new release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildlin == 'true') }}
     steps:
       - uses: actions/checkout@v3
       - name: Load cached system packages
@@ -109,12 +109,12 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: aelm
-          asset_name: aelm
-          tag: latest-linux-x86_64
+          asset_name: aelm-linux-x64
+          tag: latest
           overwrite: true
   build-mac:
     runs-on: macos-latest
-    if: contains(github.event.head_commit.message, 'please release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildosx == 'true')
+    if: ${{ contains(github.event.head_commit.message, 'new release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildosx == 'true') }}
     steps:
       - uses: actions/checkout@v2
       - name: download nim source
@@ -173,14 +173,14 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: aelm
-          asset_name: aelm
-          tag: latest-osx-x86_64-and-aarch64
+          asset_name: aelm-osx-universal
+          tag: latest
           overwrite: true
   build-linux-aarch64:
     runs-on: ubuntu-latest
     container:
       image: centos:7 #centos/devtoolset-7-toolchain-centos7
-    if: contains(github.event.head_commit.message, 'please release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildlinaarch64 == 'true')
+    if: ${{ contains(github.event.head_commit.message, 'new release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildlinaarch64 == 'true') }}
     steps:
       - uses: actions/checkout@v2
       - name: Install DevTools
@@ -251,6 +251,6 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: aelm
-          asset_name: aelm
-          tag: latest-linux-aarch64
+          asset_name: aelm-linux-arch64v8
+          tag: latest
           overwrite: true
