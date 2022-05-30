@@ -83,8 +83,9 @@ registerArg(package, nargs = 2, aliases = ["pkg","p"])
 registerArg(help, nargs = 1, aliases = ["h"])
 registerArg(user)
 registerArg(description)
+registerArg(ignore_system, aliases = ["ignore-system"])
 registerArg(clearTheEntireCache, aliases = ["clear-cache"])
-registerArg(preferSystemVersionOfExecutable, nargs = 1, aliases = ["prefer-system"])
+registerArg(prefer_system, nargs = 1, aliases = ["prefer-system"])
 
 const
   CONF_FILENAME = ".aelm.yaml"
@@ -703,14 +704,21 @@ proc runAelmSetupCommands(srcEnv: AelmModule) =
     quit(1)
 
 proc prepare(command: string): string =
-  if command.startsWith "aelm": return command.replace("aelm", getAppFilename())
-  if command.startsWith "#": return ""
+  if command.startsWith "aelm": result = command.replace("aelm", getAppFilename())
+  if command.startsWith "#": result = ""
+  # propagate flags if an "add environment" command
+  if command.len > 1 and command.split[1].startsWith "a":
+    if ignoreSystemEnabled: result.add " --ignore-system"
 
 proc runAelmScriptCommands(script: string, workingDir: string = "") =
   let aelmExe = getAppFilename()
   for line_i, line in script.splitLines.toSeq:
-    let command = prepare line.strip
+    var command = prepare line.strip
     if command.len == 0: continue
+    var simplerCommand = command
+    simplerCommand.removePrefix aelmExe.splitPath.head & DirSep
+    echo simplerCommand
+    # TODO add powershell  around command like we do for scripts
     let result = execCmdEx(command, workingDir=workingDir)
     if result.exitCode != 0:
       writeError("Error: ", &"aelmscript error")
@@ -718,6 +726,9 @@ proc runAelmScriptCommands(script: string, workingDir: string = "") =
       writeWarning(&"line {line_i+1}: ", &"{line}")
       writeWarning(&"     {line_i+1}: ", &"({command})")
       quit(1)
+    else:
+      if result.output.strip.len.bool:
+        echo result.output
 
 proc runAelmScriptCommands(env: AelmModule) =
   if env.aelmscript.len == 0: return
@@ -773,9 +784,12 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
     if destination.len == 0: &"{category}@{resultingVersion}"
     else: destination
 
+
   module.root = (getCurrentDir() / resultingDestination).dup(normalizePath)
   module.version = resultingVersion
   module.name = resultingDestination
+
+  if dirExists(module.root): return
 
   if userEnabled:
     resultingDestination = (getHomeDir() / ".aelm" / &"{category}@{resultingVersion}").dup(normalizePath)
@@ -784,6 +798,7 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
   createDir resultingDestination
 
   proc prefer(preferences: seq[string]): bool =
+    if ignoreSystemEnabled: return false
     for exeName in preferences:
       if findExe(exeName).len != 0:
         echo &"(module prefers using system's existing {exeName})"
@@ -890,7 +905,7 @@ proc doAdd =
   if addArgs.len > 2:
     writeError("Error: ", "Too many arguments.")
     quit(1)
-  if preferSystemVersionOfExecutableEnabled and preferSystemVersionOfExecutableArgs.len == 0:
+  if prefer_systemEnabled and prefer_systemArgs.len == 0:
     writeError("Error: ", "--prefer-system 1 argument expected")
     quit(1)
   let
@@ -898,7 +913,7 @@ proc doAdd =
     nameverSeq = namever.split('@')
     category = nameverSeq[0]
     version = if nameverSeq.len == 2: nameverSeq[1] else: ""
-    prefer_system = preferSystemVersionOfExecutableArgs . join("") . replace(';',',') . split(',') . filterIt(it.len.bool)
+    prefer_system = prefer_systemArgs . join("") . replace(';',',') . split(',') . filterIt(it.len.bool)
     
   addModule(category, version, destination, prefer_system)
 
@@ -1168,8 +1183,9 @@ where [SUBCMD] is one of:
   init                        (i) Downloads repo in CWD
     --user                    Downloads repo in home dir
   add <envname> [newname]     (a) Add a new environment or language
-    --prefer-system <name>,   Do not install if <name> exists in PATH
+    --prefer-system <name>,   Do not install if <name>s exists in PATH
     --user                    Install in home directory
+    --ignore-system           Ignores and --prefer-system settings
   remove <envname@version>    (rm) Remove a environment or language
     --user                    Remove from home directory
   search <envname>[@version]  (s) Search environments and languages
@@ -1365,8 +1381,10 @@ when isMainModule:
         p.captureArg help: break
         p.captureArg clearTheEntireCache: break
         p.captureArg user: continue
+        p.captureArg prefer_system: continue
+        p.captureArg ignore_system: continue
         p.captureArg description: continue
-        p.captureArg preferSystemVersionOfExecutable: continue
+        p.captureArg prefer_system: continue
         writeError("Error: ",&"Unknown option '{p.key}'")
         quit(1)
       of cmdArgument:
@@ -1379,7 +1397,7 @@ when isMainModule:
         p.captureArg exec: break
         p.captureArg connect: break
         p.captureArg disconnect: break
-        p.captureArg script: break
+        p.captureArg script: continue
         p.captureArg package: break
         writeError("Error: ",&"Unknown command '{p.key}'")
         quit(1)
