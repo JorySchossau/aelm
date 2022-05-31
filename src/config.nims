@@ -15,6 +15,13 @@ elif defined(windows) and not defined(xwindows) and not defined(norecurse):
   echo "=========================="
   echo "=  Compiling to Windows  ="
   echo "=========================="
+  switch("define","release")
+  switch("define","danger")
+  switch("stackTrace") # better bug reports for +20kB
+  #switch("define","useMalloc")
+  switch("opt","size")
+  switch("passL","-s")
+  switch("panics")
   switch("cc","vcc")
   switch("define","norecurse")
   if buildCPU == "amd64": switch("define", "cputype=x86_64")
@@ -26,6 +33,14 @@ elif defined(linux) or defined(osx) and not defined(norecurse):
   echo "============================"
   echo "=  Compiling to Linux/OSX  ="
   echo "============================"
+  switch("define","release")
+  switch("define","danger")
+  switch("stackTrace") # better bug reports for +20kB
+  #switch("gc","arc")
+  #switch("define","useMalloc")
+  switch("opt","size")
+  switch("passL","-s")
+  switch("panics")
   when defined(m1):
     switch("define", "cputype=arm")
   elif buildCPU == "amd64": switch("define", "cputype=x86_64")
