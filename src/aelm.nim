@@ -72,6 +72,7 @@ registerArg(init, nargs = -1, aliases = ["refresh","i"])
 registerArg(add, nargs = -1, aliases = ["a"])
 registerArg(remove, nargs = 1, aliases = ["rm"])
 registerArg(search, nargs = 1, aliases = ["s"])
+registerArg(info, nargs = 1, aliases = ["inf"])
 registerArg(exec, nargs = -1, aliases = ["x"])
 registerArg(connect, nargs = -1, aliases = ["c"])
 registerArg(disconnect, nargs = -1, aliases = ["d"])
@@ -913,6 +914,33 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
       writeUserInstalledModules userModules
       writeSuccess("Installed: ", &"Restart your shell to enable {category}@{resultingVersion}\n           Or type: source " & (getHomeDir() / ".aelm" / "activate"))
 
+proc doInfo() =
+  if infoArgs.len < 1:
+    writeError("Error: ", "info command requires 1 package name")
+    quit(1)
+  let (category, version, newname) = infoArgs[0].getPackageTriplet
+  let repo = loadAelmRepo()
+  var module = repo.getAelmModule(category=category, version=version)
+
+  # Unavailable
+  if module.unavailable.len.bool:
+    writeWarning("Unavailable for this OS:\n", module.unavailable)
+    quit(1)
+  
+  let downloadString = module.downloads.mapIt( "- " & it.url).join("\n").indent(4)
+
+  # TODO add provenance tracking to packages/repo files
+  echo &"""
+
+  Package: {module.category}
+  Version: {module.version}
+
+{module.description.indent(2)}
+
+  Downloads
+{downloadString}
+
+"""
 
 proc doSearch =
   # show all languages and versions
@@ -1242,6 +1270,7 @@ where [SUBCMD] is one of:
   package                     (pkg,p)
     create <name>             (c,new,n) Create new blank package template
     verify <name>             (ver,v) Verify package integrity and syntax
+  info <envname>[@version]    Show detailed package information
 
   refresh  alias of init
 
@@ -1451,6 +1480,7 @@ when isMainModule:
         p.captureArg add: continue
         p.captureArg remove: continue
         p.captureArg search: continue
+        p.captureArg info: break
         p.captureArg exec: break
         p.captureArg connect: break
         p.captureArg disconnect: break
@@ -1474,6 +1504,7 @@ when isMainModule:
   if execEnabled: doExec()
   if listEnabled: doList()
   if searchEnabled: doSearch()
+  if infoEnabled: doInfo()
   if connectEnabled: doConnect()
   if disconnectEnabled: doDisconnect()
   if clearTheEntireCacheEnabled: doClearCache()
