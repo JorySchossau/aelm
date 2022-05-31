@@ -43,7 +43,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: aelm.exe
-          asset_name: aelm-x64.exe
+          asset_name: aelm-win-x64.exe
           tag: latest
           overwrite: true
   build-linux:
@@ -255,6 +255,6 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: aelm
-          asset_name: aelm-linux-arch64v8
+          asset_name: aelm-linux-arm64v8
           tag: latest
           overwrite: true
