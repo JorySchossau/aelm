@@ -69,7 +69,7 @@ template captureArg(p:OptParser, command:untyped, control:untyped) {.dirty.} =
 ## register all cli arguments
 registerArg(list, nargs = 1, aliases = ["l","ls"])
 registerArg(init, nargs = -1, aliases = ["refresh","i"])
-registerArg(add, nargs = 2, aliases = ["a"])
+registerArg(add, nargs = -1, aliases = ["a"])
 registerArg(remove, nargs = 1, aliases = ["rm"])
 registerArg(search, nargs = 1, aliases = ["s"])
 registerArg(exec, nargs = -1, aliases = ["x"])
@@ -339,6 +339,22 @@ root: {env.root}
       else: result.add &"postsetup: |\n{env.postsetup.indent(2)}\n"
   if env.aelmscript.len.bool: result.add &"aelmscript: |\n{env.aelmscript.indent(2)}\n"
   if env.description.len.bool: result.add &"description: |\n{env.description.indent(2)}\n"
+
+proc getPackageTriplet(input: string): tuple[name, version, newname: string] =
+  var str = input
+  if str.count('@') > 1 or str.count(':') > 1:
+    writeError("Error: ", &"'{str}' Only 1 '@' and 1 ':' allowed (name@version:newName)")
+    quit(1)
+  let locAt = str.find('@')
+  let locColon = str.find(':')
+  if str.count({'@',':'}) == 2 and locAt > locColon:
+    writeError("Error: ", "Incorrect '@' and ':' placement. Should be (name@version:newName)")
+  result.name = str.split('@')[0].split(':')[0]
+  if '@' in str:
+    result.version = str.split('@')[1].split(':')[0]
+  if ':' in str:
+    result.newname = str.split(':')[1]
+
 
 proc loadAelmModule(path: string): AelmModule =
   if not dirExists path:
@@ -931,26 +947,19 @@ proc doSearch =
             echo catvers.getOrDefault(category, @[]).join("\n").indent(2)
 
 proc doAdd =
-  # expect up to 2 arguments
+  # if no Add arguments given, perform search instead
   if addArgs.len < 1:
-    # no search arguments given, perform search instead
     doSearch()
-    quit(1)
-  let namever = addArgs[0]
-  if addArgs.len > 2:
-    writeError("Error: ", "Too many arguments.")
     quit(1)
   if prefer_systemEnabled and prefer_systemArgs.len == 0:
     writeError("Error: ", "--prefer-system 1 argument expected")
     quit(1)
-  let
-    destination = if addArgs.len == 2: addArgs[1] else: ""
-    nameverSeq = namever.split('@')
-    category = nameverSeq[0]
-    version = if nameverSeq.len == 2: nameverSeq[1] else: ""
-    prefer_system = prefer_systemArgs . join("") . replace(';',',') . split(',') . filterIt(it.len.bool)
-    
-  addModule(category, version, destination, prefer_system)
+  if prefer_systemEnabled and addArgs.len > 1:
+    writeError("Error: ", "Use add command one name at a time to use --prefer-system")
+    quit(1)
+  for (category, version, nickname) in addArgs.mapIt it.getPackageTriplet:
+    let prefer_system_list = prefer_systemArgs . join("") . replace(';',',') . split(',') . filterIt(it.len.bool)
+    addModule(category, version, nickname, prefer_system_list)
 
 proc doRemove =
   # expect up to 2 arguments
@@ -1217,7 +1226,7 @@ where [SUBCMD] is one of:
   list                        (ls) list all aelm modules in CWD
   init                        (i) Downloads repo in CWD
     --user                    Downloads repo in home dir
-  add <envname> [newname]     (a) Add a new environment or language
+  add <envname>[:newname]     (a) Add a new environment or language
     --prefer-system <name>,   Do not install if <name>s exists in PATH
     --user                    Install in home directory
     --ignore-system           Ignores and --prefer-system settings
@@ -1248,32 +1257,37 @@ Examples:
   aelm help search
 """
 const HELPADD = """
-add <envname>[@version] [newname] [--prefer-system exename[,...]] [--user]
+add <envname>[@version][:newname] [options]
 (aliases: a)
 Add a new environment or language named <envname>
 optionally of version @version.
 
 example:
-  aelm add python latestPython
+  aelm add python:py
 
-creates a new directory `latestPython` in the current location,
+Creates a new directory `py` in the current location,
 and installs the latest python available into that location,
 because no specific version was specified.
 
 example:
-  aelm add python@3.10.3 py310
+  aelm add python@3.10.3
+  aelm add python
 
-creates a new directory `py310` in the current location,
-and installs python 3.10.3 into that location.
+The first command creates a new directory `python@3.10.3`
+in the current location, and installs python 3.10.3 into that location.
+The second command does the same thing, if 3.10.3 is latest available.
 
 options:
-  --prefer-system <name>
-    name: comma separated list of possibly installed executable names
+  --prefer-system <name>,...
+    name: Comma separated list of possibly installed executable names
           to check for and prefer instead of installing this module.
-    example: add cmake mycmake --prefer-system CMake,cmake
+          Only functions when adding only 1 environment at a time.
+    example: add cmake --prefer-system CMake,cmake
 
   --user
-    install persistently for the current user into $HOME/.aelm/
+    Install persistently for the current user into $HOME/.aelm/
+    Custom names (:newname) are ignored when using --user
+    example: add cmake python --user
 """
 const HELPREMOVE = """
 remove <envname> [--user]
@@ -1315,7 +1329,7 @@ options:
 const HELPSEARCH = """
 search <envname>[@version]
 (aliases: s)
-search the repository for an environment or language,
+Search the repository for a package,
 optionally for a specific version.
 
 example:
@@ -1325,7 +1339,15 @@ example:
 
 options:
   --description
-    instead searches the package description field and shows matching descriptions
+    Instead searches the package description field and shows matching descriptions
+"""
+const HELPINFO = """
+info <envname>[@version]
+(aliases: inf)
+Show detailed information for an package.
+
+example:
+  aelm info python
 """
 const HELPEXEC = """
 exec <envdir> <command>
