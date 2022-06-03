@@ -15,3 +15,6 @@ requires "zstd >= 0.6.0"
 #requires "https://github.com/joryschossau/nim_zstd#fix-mingw-cross-compile"
 requires "zippy >= 0.9.7"
 requires "puppy >= 1.5.3"
+# for dlinfer.nim
+requires "q >= 0.0.8"
+requires "regex >= 0.19.0"

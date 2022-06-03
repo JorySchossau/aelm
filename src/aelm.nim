@@ -9,16 +9,17 @@
 import parseopt # cli parsing
 from sequtils import concat, to_seq
 from os import commandLineParams
-import terminal
 # aelm
 import macros # updateVarIfKeyOfSameName
 import std/[json, sequtils, strutils, tables, strformat, os, osproc, sets, algorithm, streams]
-from std/os import getHomeDir, createDir
+from std/os import getHomeDir, createDir, getCurrentDir, setCurrentDir, setFilePermissions, walkDirRec, parentDir
 from puppy import fetch, PuppyError
 from std/rdstdin import readLineFromStdin # for stdin piping
 import yaml/serialization, streams
 from yaml import YamlParserError, YamlLoadingError
+from terminal import styledWriteLine, resetStyle, fgGreen, fgYellow, fgRed, styleDim, styleBright
 from dl import syncDownload
+from dlinfer import InferredConfidence, InferredDownload, getDLCandidates
 from std/sugar import dup, collect, `=>`
 import zstd/decompress as zstdx
 import zippy/ziparchives as zipx
@@ -84,6 +85,7 @@ registerArg(package, nargs = 2, aliases = ["pkg","p"])
 registerArg(help, nargs = 1, aliases = ["h"])
 registerArg(user)
 registerArg(description)
+registerArg(check_downloads, aliases = ["dl"])
 registerArg(ignore_system, aliases = ["ignore-system"])
 registerArg(clearTheEntireCache, aliases = ["clear-cache"])
 registerArg(prefer_system, nargs = 1, aliases = ["prefer-system"])
@@ -172,6 +174,7 @@ type
     uncompress {.defaultVal: true.}: bool
   AelmModule = object
     # used only in module dir
+    auto {.defaultVal: "".}: string
     name {.defaultVal: "".}: string
     category {.defaultVal: "".}: string
     version {.defaultVal: "".}: string
@@ -189,6 +192,7 @@ type
     description {.defaultVal: "".}: string
   AelmOS = object
     # usual overrides
+    auto {.defaultVal: "".}: string
     root {.defaultVal: "".}: string
     aelmscript {.defaultVal: "".}: string
     bins {.defaultVal: @[].}: seq[string]
@@ -207,6 +211,7 @@ type
     armlinux {.defaultVal: nil.}: ref AelmOS
     armosx {.defaultVal: nil.}: ref AelmOS
     # usual overrides
+    auto {.defaultVal: "".}: string
     root {.defaultVal: "".}: string
     aelmscript {.defaultVal: "".}: string
     bins {.defaultVal: @[].}: seq[string]
@@ -221,6 +226,7 @@ type
   AelmCategory = object
     versions {.defaultVal: initTable[string,AelmVersion]().}: Table[string,AelmVersion]
     # usual overrides
+    auto {.defaultVal: "".}: string
     root {.defaultVal: "".}: string
     aelmscript {.defaultVal: "".}: string
     bins {.defaultVal: @[].}: seq[string]
@@ -282,7 +288,7 @@ macro updateVars(envA: var untyped, envB: untyped, variables: varargs[untyped]):
       if `envB`.`v`.len.bool: `envA`.`v` = `envB`.`v`
 
 template update(a:var AelmModule, b: untyped) {.dirty.} =
-  updateVars(envA=a, envB=b, bins, root, prefer_system, downloads, presetup, setup, postsetup, aelmscript, envvars, description, unavailable)
+  updateVars(envA=a, envB=b, bins, root, prefer_system, downloads, presetup, setup, postsetup, aelmscript, envvars, description, auto, unavailable)
 
 proc `$`(env: AelmModule): string =
   proc seqStringsToYaml(strings: seq[string], name: string, multiline: bool = true): string =
@@ -322,6 +328,8 @@ root: {env.root}
       result.add &"  {key}: '{value}'\n"
   result.add "\n# End of settings that still have an effect on this module."
   result.add "\n# The below information is included as a record of this module's origin.\n"
+  result.add "\n"
+  if env.auto.len.bool: result.add &"auto: {env.auto}\n"
   if env.downloads.len.bool:
     result.add "\ndownloads:\n"
     for dl in env.downloads:
@@ -569,6 +577,8 @@ proc getCurrentOS: string =
     aelmos # we assume x86_64 as more common for json key legibility in aelm conf
 
 proc sortVersions(versions: var seq[string]) =
+  # sorts version strings, respecting formats: 0.1.2, v0.1.2, latest
+  # sorts newer to older
   proc compareVersions(v1,v2:string):int =
     let
       s1 = v1.split('.')
@@ -579,13 +589,28 @@ proc sortVersions(versions: var seq[string]) =
       elif s1[i].parseInt > s2[i].parseInt: return 1
       else: return 0
     return 0
-  versions.sort(cmp=compareVersions)
+  proc moveToEndIfExist(s: var seq[string], t: string) =
+    if t in s: 
+      s.add t
+      s.delete s.find(t)
+  var asciiVersions: seq[string]
+  const NUMBERS = "0123456789"
+  for i in countDown(versions.high,0):
+    if versions[i][0] notin NUMBERS:
+      asciiVersions.add versions[i]
+      versions.delete i
+  sort versions, cmp=compareVersions
+  sort asciiVersions
+  asciiVersions.moveToEndIfExist "stable"
+  asciiVersions.moveToEndIfExist "latest"
+  versions.add asciiVersions
+  reverse versions
 
 proc getCategoriesAndVersions(repo: AelmRepo): Table[string, seq[string]]=
   let categories = repo.keys.toSeq.dup(sort)
   for category in categories:
     let versionKeys = repo[category].versions.keys.toSeq
-    for version in versionKeys.dup(sortVersions).dup(reverse):
+    for version in versionKeys.dup(sortVersions):
       result.mgetOrPut(category, newSeq[string]()).add version
   return result
 
@@ -604,9 +629,15 @@ proc getAelmModule(repo: AelmRepo, category, version: string): AelmModule =
   # default to highest versions
   sortVersions versions
   let guessedVersion = block:
-    if version.len == 0: versions[^1]
+    if version.len == 0: versions[0]
     else: version
-  if guessedVersion notin versions: writeError("Error: ", &"Not a valid version '{guessedVersion}'. Options are:\n" & join(versions,"\n").indent(2))
+  if guessedVersion notin versions:
+    if versions.len == 0:
+      writeError("Error: ", &"No versions defined for {category}")
+      quit(1)
+    else:
+      writeError("Error: ", &"Not a valid version '{guessedVersion}'. Options are:\n" & join(versions,"\n").indent(2))
+      quit(1)
   env.version = guessedVersion
 
   env.update repo[category].versions[guessedVersion]
@@ -615,10 +646,11 @@ proc getAelmModule(repo: AelmRepo, category, version: string): AelmModule =
     let os = ident getCurrentOS()
     result = newStmtList()
     result.add quote do:
-      if isNil `repoCatVersion`.`os`:
+      if isNil(`repoCatVersion`.`os`) and (not env.auto.len.bool):
         writeWarning("Warning: ", "module not available for this OS")
         quit(1)
-      env.update `repoCatVersion`.`os`
+      elif not isNil `repoCatVersion`.`os`:
+        env.update `repoCatVersion`.`os`
 
   env.updateByOS repo[category].versions[guessedVersion]
   
@@ -770,13 +802,49 @@ proc runAelmScriptCommands(env: AelmModule) =
     script = env.aelmscript.multiReplace(replacements)
   runAelmScriptCommands(script, env.root)
 
-proc runAelmDownloads(srcEnv: AelmModule) =
-  var env = srcEnv
+proc inferBinPathForName(path, name: string): string =
+  for file in walkDirRec(path, yieldFilter={pcFile}, relative=true):
+    if name == file.extractFilename:
+      return fmt"{{root}}/{file.parentDir}".strip(chars={'/'})
+
+proc runAelmDownloadsAndExpandAuto(env: var AelmModule) =
   let dirPath = env.root
   let replacements = aelmReplacementPairsFromAelmEnv env
   expandPlaceholders env
   var filePath: string
   var filename: string
+  # process `auto` field
+  if env.auto.len.bool:
+    var inferrence: InferredDownload
+    try:
+      inferrence = getDLCandidates(env.auto, env.version)
+    except PuppyError as e:
+      writeError("Error: ", &"Unable to download {env.category}@{env.version}")
+      echo e.msg
+      quit(1)
+    if inferrence.candidates.len == 0:
+      writeError("Error: ", &"No download candidates found for '{env.auto}'")
+      quit(1)
+    let url = inferrence.candidates[0]
+    let filename = url.splitPath.tail
+    filePath = dirPath / filename
+    try:
+      download(url=url, destination=dirPath, filename=filename)
+      env.downloads.add Download(url:url)
+    except Exception as e:
+      writeError("Error: ", &"Failed to download {url}")
+      echo       "       " & e.msg
+      quit(1)
+    if anyIt(".zst .tar .gz .taz .tgz .xz .zip".split, filename.endsWith it):
+      uncompress(filePath, dirPath)
+      let inferredBinPath = inferBinPathForName(path=dirPath, name=env.category)
+      env.bins = @[inferredBinPath]
+    else:
+      env.downloads[^1].uncompress = false
+      filePath.setFilePermissions {fpUserExec}
+      env.bins = @["{root}"]
+    return
+  # process `downloads` field
   for dl in env.downloads:
     filename = block:
       if dl.name.len.bool: dl.name
@@ -838,7 +906,18 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
         return true
 
   # write conf file (and and it can be referenced when running setup commands)
+  expandPlaceholders module
+
+  runAelmDownloadsAndExpandAuto module
+
+  # write conf file (and and it can be referenced when running setup commands)
+  expandPlaceholders module
+
   let aelmModConfName = resultingDestination / CONF_MOD_FILENAME
+
+  # seed with our aelm conf
+  if user_enabled: copyFile(getHomeDir() / ".aelm" / CONF_FILENAME, module.root / CONF_FILENAME)
+  else: copyFile(CONF_FILENAME, module.root / CONF_FILENAME)
 
   if (prefer module.prefer_system) or (prefer prefer_system):
     module.bins = @[] # passthrough PATH bin var and use system's {exeName}
@@ -853,14 +932,6 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
     return
   else:
     writeFile aelmModConfName, $module
-
-  expandPlaceholders module
-
-  # seed with our aelm conf
-  if user_enabled: copyFile(getHomeDir() / ".aelm" / CONF_FILENAME, module.root / CONF_FILENAME)
-  else: copyFile(CONF_FILENAME, module.root / CONF_FILENAME)
-
-  runAelmDownloads module
 
   runAelmScriptCommands module
   
@@ -1221,14 +1292,41 @@ $name:
   fmt"{getCurrentDir() / name}.aelm.yaml".writeFile content
   writeSuccess("Created package ", &"{getCurrentDir() / name}.aelm.yaml")
 
-proc doVerifyPackage =
-  let name = packageArgs[1]
+proc doCheckPackage =
+  let name = packageArgs[1].dup(removeSuffix(".yaml")) & ".yaml"
   let path = getCurrentDir() / name
   if not fileExists path:
     writeError("Error: ", &"No file named '{name}'")
     quit(1)
-  let env = helperLoadAelmRepo path 
-  writeSuccess("Package OK")
+  let repo = helperLoadAelmRepo path 
+  stdout.styledWriteLine "Package format ", fgGreen, "OK"
+  if checkDownloadsEnabled:
+    let TestDir = appCacheDir() / "dltest"
+    let catvers = getCategoriesAndVersions repo
+    createDir TestDir
+    for category,versions in catvers:
+      for version in versions:
+        echo &"checking downloads for {category}@{version}"
+        var module = repo.getAelmModule(category=category, version=version)
+        module.root = TestDir
+        expandPlaceholders module
+        # check DLs
+        runAelmDownloadsAndExpandAuto module
+        expandPlaceholders module
+        stdout.styledWriteLine &"{category}@{version} downloads ", fgGreen, "OK"
+        # check bins paths
+        var foundExe = not module.bins.len.bool
+        for binpath in module.bins:
+          if binpath.len == 0: continue
+          let originalDir = getCurrentDir()
+          setCurrentDir binpath
+          if findExe(&"./{category}").startsWith("./"):
+            foundExe = true
+          setCurrentDir originalDir
+        if foundExe:
+          stdout.styledWriteLine &"{category}@{version} bins paths ", fgGreen, "OK"
+        else:
+          stdout.styledWriteLine fgYellow, &"{category}@{version} executable '{category}' NOT FOUND in bin paths (maybe this is okay?)"
 
 proc doPackage =
   if packageArgs.len < 2:
@@ -1238,7 +1336,7 @@ proc doPackage =
     quit(1)
   case packageArgs[0].toLower:
     of "create","new","c","n": doCreatePackage()
-    of "verify","ver","v","check","chk": doVerifyPackage()
+    of "verify","ver","v","check","chk": doCheckPackage()
     else:
       writeError("Error: ", &"Unknown package subcommand '{packageArgs[0]}'")
       quit(1)
@@ -1270,6 +1368,7 @@ where [SUBCMD] is one of:
   package                     (pkg,p)
     create <name>             (c,new,n) Create new blank package template
     verify <name>             (ver,v) Verify package integrity and syntax
+      --dl                    Test all package downloads and check bin paths
   info <envname>[@version]    Show detailed package information
 
   refresh  alias of init
@@ -1443,6 +1542,10 @@ Creates a template aelm package named <name>.aelm.yaml
 aelm package verify <name>
 (verify aliases: ver, v, check, chk)
 Attempts to load <name> as a package, inspecting for problems.
+
+verify options:
+  --dl
+    Download all files for all versions and check the executable file locations (bin paths)
 """
 const HELP_INDEX = {
   "":HELPSTR,
@@ -1470,6 +1573,7 @@ when isMainModule:
         p.captureArg prefer_system: continue
         p.captureArg ignore_system: continue
         p.captureArg description: continue
+        p.captureArg check_downloads: continue
         p.captureArg prefer_system: continue
         writeError("Error: ",&"Unknown option '{p.key}'")
         quit(1)
@@ -1485,7 +1589,7 @@ when isMainModule:
         p.captureArg connect: break
         p.captureArg disconnect: break
         p.captureArg script: continue
-        p.captureArg package: break
+        p.captureArg package: continue
         writeError("Error: ",&"Unknown command '{p.key}'")
         quit(1)
   if helpEnabled:
