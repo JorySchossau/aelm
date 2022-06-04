@@ -86,7 +86,7 @@ registerArg(help, nargs = 1, aliases = ["h"])
 registerArg(user)
 registerArg(description)
 registerArg(check_downloads, aliases = ["dl"])
-registerArg(ignore_system, aliases = ["ignore-system"])
+registerArg(ignore_system, aliases = ["ignore-system"]) # TODO what was this for?
 registerArg(clearTheEntireCache, aliases = ["clear-cache"])
 registerArg(prefer_system, nargs = 1, aliases = ["prefer-system"])
 
