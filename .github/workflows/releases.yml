@@ -205,7 +205,7 @@ jobs:
             nim/bin
             zig
             ${PWD}/.nimble
-          key: ${{ runner.os }}-${{ env.NIM_TAG }}v3
+          key: ${{ runner.os }}-${{ env.NIM_TAG }}v4
       - name: compile nim
         if: steps.cache-nim.outputs.cache-hit != 'true'
         run: |
@@ -236,10 +236,20 @@ jobs:
       - name: Nimble Deps
         if: steps.cache-nim.outputs.cache-hit != 'true'
         run: |
-          nimble install yaml -y
-          nimble install https://github.com/joryschossau/nim_zstd@#fix-mingw-cross-compile -y
-          nimble install zippy -y
-          nimble install puppy -y
+          nimble install -y yaml
+          nimble install -y zstd
+          nimble install -y zippy
+          nimble install -y puppy
+          nimble install -y q
+          nimble install -y regex
+      - name: Show Paths
+        run: |
+          nimble path yaml
+          nimble path puppy
+      - name: Investigate Nimble
+        run: |
+          echo "try second location"
+          ls -lah ~/.nimble/pkgs
       - name: Build Aelm
         run: |
           rm src/config.nims
