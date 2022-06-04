@@ -765,6 +765,7 @@ proc runAelmSetupCommands(srcEnv: AelmModule) =
     else: tasks.join("; ")
   let result = execCmdEx(cmdstring, workingDir=env.root, options={poEvalCommand})
   if result.exitCode != 0:
+    writeError("Error: ", &"Command failed '{cmdstring}'")
     echo result.output
     quit(1)
 
@@ -1303,16 +1304,27 @@ proc doCheckPackage =
   if checkDownloadsEnabled:
     let TestDir = appCacheDir() / "dltest"
     let catvers = getCategoriesAndVersions repo
-    createDir TestDir
+    # prepare dltest dir
+    try:
+      removeDir TestDir
+      createDir TestDir
+    except OSError as e:
+      writeError("Error: ", &"Could not clear or create directory '{TestDir}'")
+      echo e.msg
+      quit(1)
     for category,versions in catvers:
       for version in versions:
         echo &"checking downloads for {category}@{version}"
         var module = repo.getAelmModule(category=category, version=version)
         module.root = TestDir
+        module.name = category
         expandPlaceholders module
-        # check DLs
+        let aelmModConfName = TestDir / CONF_MOD_FILENAME
+        writeFile aelmModConfName, $module
         runAelmDownloadsAndExpandAuto module
         expandPlaceholders module
+        runAelmSetupCommands module
+        # check DLs
         stdout.styledWriteLine &"{category}@{version} downloads ", fgGreen, "OK"
         # check bins paths
         var foundExe = not module.bins.len.bool
@@ -1327,6 +1339,12 @@ proc doCheckPackage =
           stdout.styledWriteLine &"{category}@{version} bins paths ", fgGreen, "OK"
         else:
           stdout.styledWriteLine fgYellow, &"{category}@{version} executable '{category}' NOT FOUND in bin paths (maybe this is okay?)"
+    try:
+      removeDir TestDir
+    except OSError as e:
+      writeError("Error: ", &"Could not clear directory '{TestDir}'")
+      echo e.msg
+      quit(1)
 
 proc doPackage =
   if packageArgs.len < 2:
