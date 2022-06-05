@@ -86,9 +86,11 @@ registerArg(help, nargs = 1, aliases = ["h"])
 registerArg(user)
 registerArg(description)
 registerArg(check_downloads, aliases = ["dl"])
-registerArg(ignore_system, aliases = ["ignore-system"]) # TODO what was this for?
 registerArg(clearTheEntireCache, aliases = ["clear-cache"])
+# `add` arguments
+registerArg(ignore_system, aliases = ["ignore-system"]) # TODO what was this for?
 registerArg(prefer_system, nargs = 1, aliases = ["prefer-system"])
+#registerArg(not_module, nargs = 1, aliases = ["not"])
 
 const
   CONF_FILENAME = ".aelm.yaml"
@@ -841,8 +843,12 @@ proc runAelmDownloadsAndExpandAuto(env: var AelmModule) =
       let inferredBinPath = inferBinPathForName(path=dirPath, name=env.category)
       env.binpaths = @[inferredBinPath]
     else:
+      # TODO if no exename set?
+      let newFilePath = dirPath / env.category
+      if filePath.extractFilename != env.category:
+        moveFile(filePath, newFilePath)
       env.downloads[^1].uncompress = false
-      filePath.setFilePermissions {fpUserExec}
+      newFilePath.setFilePermissions {fpUserExec}
       env.binpaths = @["{root}"]
     return
   # process `downloads` field
@@ -886,6 +892,7 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
     if destination.len == 0: &"{category}@{resultingVersion}"
     else: destination
 
+  echo &"Installing {category}..."
 
   module.root = (getCurrentDir() / resultingDestination).dup(normalizePath)
   module.version = resultingVersion
@@ -1326,6 +1333,9 @@ proc doCheckPackage =
         runAelmSetupCommands module
         # check DLs
         stdout.styledWriteLine &"{category}@{version} downloads ", fgGreen, "OK"
+        # default to root binpath if blank binpath found
+        #if module.binpaths.len.bool and module.binpaths[0] == "":
+        #  module.binpaths[0] = module.root
         # check binpaths
         var foundExe = not module.binpaths.len.bool
         for binpath in module.binpaths:
@@ -1368,7 +1378,7 @@ Usage:
 where [SUBCMD] is one of:
   help [SUBCMD]               (h) print help, or get help for another SUBCMD
   list                        (ls) list all aelm modules in CWD
-  init                        (i) Downloads repo in CWD
+  init [URIs...]              (i) Downloads default repo and others to CWD
     --user                    Downloads repo in home dir
   add <envname>[:newname]     (a) Add a new environment or language
     --prefer-system <name>,   Do not install if <name>s exists in PATH
@@ -1397,10 +1407,11 @@ Options:
   --clear-cache   Clear the download cache
 
 Examples:
-  aelm add python pylatest
+  aelm help search
+  aelm search python
+  aelm add python:pylatest
   aelm exec pylatest python --version
   aelm add nim --user
-  aelm help search
 """
 const HELPADD = """
 add <envname>[@version][:newname] [options]
@@ -1457,12 +1468,13 @@ Lists all the aelm environments and languages in the current working directory.
 Optionally, list aelm environments in a specific directory other than CWD.
 """
 const HELPINIT = """
-init
+init [URIs...]
 (aliases: refresh, i)
 Downloads the latest repository information and stores it locally as .aelm.yaml
 This file also acts as a flag so you know this is an aelm-capable directory.
 Init is a separate step so you have the option to edit the file to your liking
-or verify what will run.
+or verify what will run. Multiple URIs can be specified on the local system
+or remote http and they will be aggregated into the local repository.
 
 options:
   --user
