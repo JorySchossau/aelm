@@ -1301,7 +1301,7 @@ $name:
   writeSuccess("Created package ", &"{getCurrentDir() / name}.aelm.yaml")
 
 proc doCheckPackage =
-  let name = packageArgs[1].dup(removeSuffix(".yaml")) & ".yaml"
+  let name = packageArgs[1].dup(removeSuffix(".aelm.yaml")) & ".aelm.yaml"
   let path = getCurrentDir() / name
   if not fileExists path:
     writeError("Error: ", &"No file named '{name}'")
