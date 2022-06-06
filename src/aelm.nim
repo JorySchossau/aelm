@@ -500,9 +500,16 @@ proc download(url, destination, filename:string; useCache = true) =
 proc helperLoadAelmRepo(path: string): AelmRepo =
   var stream: FileStream
   try:
-    stream = newFileStream(path, fmRead)
-    stream.load result
-    close stream
+    if path.startsWith "http":
+      let content = fetch path
+      content.load result
+    else:
+      stream = newFileStream(path, fmRead)
+      stream.load result
+      close stream
+  except PuppyError as e:
+    writeError("Error: ", &"unable to download file '{path}'")
+    quit(1)
   except IOError:
     writeError("Error: ", &"unable to access file '{CONF_FILENAME}'")
     quit(1)
@@ -517,7 +524,8 @@ proc helperLoadAelmRepo(path: string): AelmRepo =
     writeWarning(&"{e.mark.line}:  {e.lineContent}")
     quit(1)
   finally:
-    close stream
+    if not isNil stream:
+      close stream
 
 proc doInit =
   const MAIN_REPO_URL = "https://github.com/JorySchossau/aelm-packages/releases/download/latest/aelm-repo.yaml"
@@ -560,8 +568,8 @@ proc loadAelmRepo(path = ""): AelmRepo =
     if path.len.bool: path
     elif userEnabled: getHomeDir() / ".aelm" / CONF_FILENAME
     else: getCurrentDir() / CONF_FILENAME
-  if not fileExists filePath:
-    writeWarning("Warning: ", &"no repo file found in '{filePath}'")
+  if (not fileExists filePath) and (not filePath.startsWith "http"):
+    writeWarning("Warning: ", &"no repo file found at '{filePath}'")
     doInit()
   result = helperLoadAelmRepo filePath
 
@@ -1148,7 +1156,7 @@ proc doAdd =
     quit(1)
   # perform repo file additions if first argument is repo file
   # otherwise perform normal aelm add commands
-  let repoFileSpecified = fileExists addArgs[0]
+  let repoFileSpecified = addArgs[0].fileExists or addArgs[0].startsWith("http")
   if repoFileSpecified:
     let prefer_system_list = prefer_systemArgs . join("") . replace(';',',') . split(',') . filterIt(it.len.bool)
     for filePath in addArgs:
@@ -1289,102 +1297,40 @@ proc doScript() =
 
 proc doCreatePackage =
   const contentTemplate = """
-# required is to fully specify at least 1 configuration
-# but hopefully you can support multiple OS
+# example of all other optional fields - normally unnecessary 
 # $name:
 #   versions:
-#     1.0:
-#       linux:
+#     latest:
 #       windows:
-#       osx:
-#       armlinux:
-#       armosx:
-#     2.0:
+#         prefer_system: ['$name']
+#         binpaths: ['{root}/bin']
+#         downloads:
+#           - url: https://...
+#             name: file.zip
+#             uncompress: true
+#         setup: mv {root}/bin/win-$name.exe {root}/bin/$name.exe
+#         testcmd: '{root}/bin/$name.exe --version'
+#         envvars:
+#           MYTOOL_LIB: '{root}/lib'
+#         aelmscript: |
+#           aelm add cmake
+#           echo "finished with $name dependencies"
+#         ...
 #       linux:
-#       windows:
-#       osx:
-#       armlinux:
-#       armosx:
-#     ...
+#         ...
 
 $name:
+  # this name is guessed as the executable name for this package, too.
   description: |
     "The description is usually a quote from the software website,
      followed by an attribution of the software site & quote location."
     - https://some/place
   versions:
     # template only inclues a single version, but you can have many
-    1.0:
-      # template only includes a single OS, but you can and should
-      # define the following (linux, windows, osx, armlinux, armosx)
-      # where arm is assumed to be aarch64 / M1.
-      linux:
-        # typically a package will download a binary
-        # release specific to each operating system
-        # we can automatically uncompress most compressed files
-        downloads: # optional
-          - url: https://filesamples.com/samples/document/txt/sample1.txt # required
-            name: dl-test-file.txt # optional 
-            uncompress: false # optional (default true)
-          - url: https://filesamples.com/samples/document/txt/sample2.txt
-          # ...
-        # presetup, setup, postsetup are all command strings
-        # that can perform detailed work after the downloads
-        # they are split into 3 to allow some being shared
-        # by multiple configurations.
-        presetup: | # optional
-          echo touch some_file.txt
-          echo cp some_file.txt another_file.txt
-        setup: | # optional
-          echo wc -l some_file.txt > third_file.txt
-        postsetup: echo rm *file.txt # optional
-
-        # optional
-        # binpaths are the locations of important executables
-        # you want to be able to call on the command line.
-        # {root} will be expanded to the location
-        # of the package. yaml strings cannot start
-        # unquoted with { so this is a quoted string.
-        binpaths: ['{root}/bin'] # any sublocation, even '{root}'
-
-        # optional
-        # these are non-system-'PATH' environment variables required by the package
-        # Usually we want to find out how to set these so that
-        # the package operates truly self-contained within its
-        # directory, not putting files all across the system.
-        # Var names ending in PATH will be concatenated correctly.
-        # with existing values.
-        # Note more keyword expansions.
-        # Valid keywords are:
-        #   root - location of package
-        #   cwd - current working directory at time of call
-        #   name - name of the package (top-level key)
-        #   version - version of package (version key)
-        envvars:
-          PACKAGEHOME: '{root}/python'
-          PACKAGESEARCH: '{cwd}'
-
-        # optional
-        # will not download or run any commands if any of
-        # the following executables exist on the system on PATH
-        # do not include the '.exe'
-        prefer_system: [python, python3]
-
-        # optional
-        # a series of aelm commands
-        # optionally mixed in with shell commands
-        # windows support is provided by powershell
-        # so you can use standard posix-style commands
-        # and forward slash pathing
-        aelmscript: |
-          aelm add python py
-          aelm add zig cpp
-          aelm connect cpp py
-          echo "you can now use python modules that require a c++ compiler"
-
-# lastly, all optional fields can be specified at a higher scope
-# and will percolate to the other versions or OS configurations
-# and you can override them. This only saves typing.
+    # the 'latest' or highest version number is used for inferrence when auto
+    latest:
+      # We can usually infer everything necessary from only a github repo url
+      auto: https://github.com/someUser/someProject
 """
   let name = packageArgs[1]
   let content = contentTemplate % ["name", name]
@@ -1499,7 +1445,9 @@ where [SUBCMD] is one of:
   list                        (ls) list all aelm modules in CWD
   init [URIs...]              (i) Downloads default repo and others to CWD
     --user                    Downloads repo in home dir
-  add <envname>[:newname]     (a) Add a new environment or language
+  add <envname>[:newname]     (a) Add a new environment or language by name
+                              or by specifying a single module .aelm.yaml
+                              local or remote file.
     --prefer-system <name>,   Do not install if <name>s exists in PATH
     --user                    Install in home directory
     --ignore-system           Ignores and --prefer-system settings
@@ -1694,7 +1642,11 @@ Attempts to load <name> as a package, inspecting for problems.
 
 verify options:
   --dl
-    Download all files for all versions and check the executable file locations (bin paths)
+    Download all files for all versions and check:
+      * extraction (if necessary)
+      * bin paths hold the expected binaries
+      * a test command passes (any of: version, --version, --help)
+    You can override `testcmd` in yaml with full path and command
 """
 const HELP_INDEX = {
   "":HELPSTR,
