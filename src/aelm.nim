@@ -177,6 +177,7 @@ type
   AelmModule = object
     # used only in module dir
     auto {.defaultVal: "".}: string
+    testcmd {.defaultVal: "".}: string
     name {.defaultVal: "".}: string
     category {.defaultVal: "".}: string
     version {.defaultVal: "".}: string
@@ -196,6 +197,7 @@ type
     # usual overrides
     auto {.defaultVal: "".}: string
     root {.defaultVal: "".}: string
+    testcmd {.defaultVal: "".}: string
     aelmscript {.defaultVal: "".}: string
     binpaths {.defaultVal: @[].}: seq[string]
     unavailable {.defaultVal: "".}: string
@@ -215,6 +217,7 @@ type
     # usual overrides
     auto {.defaultVal: "".}: string
     root {.defaultVal: "".}: string
+    testcmd {.defaultVal: "".}: string
     aelmscript {.defaultVal: "".}: string
     binpaths {.defaultVal: @[].}: seq[string]
     unavailable {.defaultVal: "".}: string
@@ -230,6 +233,7 @@ type
     # usual overrides
     auto {.defaultVal: "".}: string
     root {.defaultVal: "".}: string
+    testcmd {.defaultVal: "".}: string
     aelmscript {.defaultVal: "".}: string
     binpaths {.defaultVal: @[].}: seq[string]
     unavailable {.defaultVal: "".}: string
@@ -272,6 +276,7 @@ proc expandPlaceholders(env: var AelmModule) =
   env.presetup = env.presetup.multiReplace(replacements)
   env.setup = env.setup.multiReplace(replacements)
   env.postsetup = env.postsetup.multiReplace(replacements)
+  env.testcmd = env.testcmd.multiReplace(replacements)
   for bin_i in 0..env.binpaths.high:
     env.binpaths[bin_i] = env.binpaths[bin_i].multiReplace(replacements).multiReplace(replacements).dup(normalizePath)
     when defined(windows): env.binpaths[bin_i] = env.binpaths[bin_i].normalizePathToWin
@@ -290,7 +295,7 @@ macro updateVars(envA: var untyped, envB: untyped, variables: varargs[untyped]):
       if `envB`.`v`.len.bool: `envA`.`v` = `envB`.`v`
 
 template update(a:var AelmModule, b: untyped) {.dirty.} =
-  updateVars(envA=a, envB=b, binpaths, root, prefer_system, downloads, presetup, setup, postsetup, aelmscript, envvars, description, auto, unavailable)
+  updateVars(envA=a, envB=b, binpaths, root, prefer_system, downloads, presetup, setup, postsetup, aelmscript, testcmd, envvars, description, auto, unavailable)
 
 proc `$`(env: AelmModule): string =
   proc seqStringsToYaml(strings: seq[string], name: string, multiline: bool = true): string =
@@ -328,6 +333,7 @@ root: {env.root}
     result.add "\nenvvars:\n"
     for key,value in env.envvars:
       result.add &"  {key}: '{value}'\n"
+  if env.testcmd.len.bool: result.add "testcmd: {env.testcmd}\n"
   result.add "\n# End of settings that still have an effect on this module."
   result.add "\n# The below information is included as a record of this module's origin.\n"
   result.add "\n"
@@ -977,6 +983,7 @@ proc addModule(category, version, destination: string, prefer_system: seq[string
     module.setup = ""
     module.postsetup = ""
     module.aelmscript = ""
+    module.testcmd = ""
     module.envvars.clear
     module.description = ""
     writeFile aelmModConfName, $module
@@ -1345,7 +1352,18 @@ $name:
 proc findExesInDir(path: string): seq[string] =
   for file in walkDirRec(path, {pcFile}):
     if fpUserExec in file.getFilePermissions:
-      result.add file.extractFilename
+      result.add file
+
+proc testExesWithCommand(paths: seq[string], testcmd: string): bool =
+  for exeFilePath in paths:
+    const COMMON_COMMANDS = [" --version", " version", " --help"]
+    let testCommands = block:
+      if testcmd.len.bool: @[testcmd]
+      else: COMMON_COMMANDS.mapIt(exeFilePath & it)
+    for command in testCommands:
+      let outcome = execCmdEx(command, workingDir = exeFilePath.parentDir)
+      if outcome.exitCode == 0:
+        return true
 
 proc doCheckPackage =
   let name = packageArgs[1].dup(removeSuffix(".aelm.yaml")) & ".aelm.yaml"
@@ -1383,14 +1401,18 @@ proc doCheckPackage =
         # check binpaths
         var foundExe = not module.binpaths.len.bool
         var exeNames: seq[string]
+        var exePaths: seq[string]
         for binpath in module.binpaths:
           if binpath.len == 0: continue
           let originalDir = getCurrentDir()
           setCurrentDir binpath
           if findExe(&"./{category}").startsWith("./"):
             foundExe = true
+            exePaths.add (getCurrentDir() / category)
           if not foundExe:
-            exeNames.add findExesInDir binpath
+            for exe in findExesInDir binpath:
+              exePaths.add exe
+              exeNames.add exe.extractFilename
           setCurrentDir originalDir
         if foundExe:
           stdout.styledWriteLine &"{category}@{version} binpaths ", fgGreen, "OK"
@@ -1398,6 +1420,12 @@ proc doCheckPackage =
           stdout.styledWriteLine &"{category}@{version} binpaths ", fgGreen, "OK", " (", exeNames.join(","), ")"
         else:
           stdout.styledWriteLine fgYellow, &"{category}@{version} executables NOT FOUND in bin paths (maybe this is okay?)"
+        # version test
+        let testCommandSuccess = testExesWithCommand(exePaths, module.testcmd)
+        if testCommandSuccess:
+          stdout.styledWriteLine &"{category}@{version} exe test ", fgGreen, "OK"
+        else:
+          stdout.styledWriteLine &"{category}@{version} exe test ", fgRed, "FAILED"
     try:
       removeDir TestDir
     except OSError as e:
