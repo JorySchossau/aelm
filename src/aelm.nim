@@ -770,8 +770,6 @@ proc addPathAndEnvvarsFromPath(dirName:string) =
       newPath.add os.getEnv("PATH","")
       os.putEnv("PATH", newPath)
   # update ENVVARS
-  if env.envvars.len.bool:
-    echo "configuring environment variables"
   for key,value in env.envvars:
       # concatenate var contents if variable name ends in PATH
       # otherwise prefer existing environment contents if exist
@@ -786,20 +784,20 @@ proc addPathAndEnvvarsFromPath(dirName:string) =
 proc getEnvCtorString(env: AelmModule, formatstr: string): string =
   for name,value in env.envvars:
       result.add formatstr % [name, value]
-      #result.add &"set {name}={value}\n"
-      #result.add &"export {name}=\"{value}\"\n"
 
 proc getEnvDtorString(env: AelmModule, formatstr: string): string =
   for name in env.envvars.keys:
     result.add formatstr % [name]
-      #result.add &"set {name}=\n"
-      #result.add &"export {name}=\n"
 
-proc runAelmSetupCommands(srcEnv: AelmModule) =
+proc runAelmSetupCommands(srcEnv: AelmModule, phase: static string) =
   var env = srcEnv
   let replacements = aelmReplacementPairsFromAelmEnv env
   expandPlaceholders env
-  var tasks = splitLines(env.presetup & "\n" & env.setup & "\n" & env.postsetup).toSeq
+  var tasks = block:
+    when phase == "presetup": splitLines(env.presetup).toSeq
+    elif phase == "setup": splitLines(env.setup).toSeq
+    elif phase == "postsetup": splitLines(env.postsetup).toSeq
+    else: @[]
   tasks.applyIt(it.strip)
   tasks = tasks.filterIt(it.len.bool).filterIt(not it.startsWith "#")
   addPathAndEnvvarsFromPath(env.root)
@@ -817,11 +815,16 @@ proc runAelmSetupCommands(srcEnv: AelmModule) =
     quit(1)
 
 proc prepare(command: string): string =
-  if command.startsWith "aelm": result = command.replace("aelm", getAppFilename())
-  if command.startsWith "#": result = ""
+  if command.startsWith "aelm":
+    # only replace first occurrence
+    result = getAppFilename() & command[min(4,command.len) .. ^1]
+  elif command.startsWith "#":
+    result = ""
   # propagate flags if an "add environment" command
-  if command.len > 1 and command.split[1].startsWith "a":
+  elif command.len > 1 and command.split[0].extractFilename == "aelm" and command.split[1].startsWith "a":
     if ignoreSystemEnabled: result.add " --ignore-system"
+  else:
+    result = command
 
 proc runAelmScriptCommands(script: string, workingDir: string = "") =
   let aelmExe = getAppFilename()
@@ -830,9 +833,8 @@ proc runAelmScriptCommands(script: string, workingDir: string = "") =
     if command.len == 0: continue
     var simplerCommand = command
     simplerCommand.removePrefix aelmExe.splitPath.head & DirSep
-    echo simplerCommand
     # TODO add powershell  around command like we do for scripts
-    let result = execCmdEx(command, workingDir=workingDir)
+    let result = execCmdEx(command, workingDir=workingDir, options = {poEvalCommand})
     if result.exitCode != 0:
       writeError("Error: ", &"aelmscript error")
       echo result.output
@@ -842,6 +844,7 @@ proc runAelmScriptCommands(script: string, workingDir: string = "") =
     else:
       if result.output.strip.len.bool:
         echo result.output
+    echo result.output
 
 proc runAelmScriptCommands(env: AelmModule) =
   if env.aelmscript.len == 0: return
@@ -930,6 +933,7 @@ proc removeAelmDownloads(env: AelmModule) =
   var filePath: string
   for dl in env.downloads:
     if not dl.uncompress: continue
+    echo "removing downloads"
     filePath = dirPath / dl.name
     try:
       removeFile filePath
@@ -1015,8 +1019,10 @@ proc addModule(desiredCategory, desiredVersion, destination: string, prefer_syst
   let aelmModConfName = resultingDestination / CONF_MOD_FILENAME
 
   # seed with our aelm conf
-  if user_enabled: copyFile(getHomeDir() / ".aelm" / CONF_FILENAME, module.root / CONF_FILENAME)
-  else: copyFile(CONF_FILENAME, module.root / CONF_FILENAME)
+  if user_enabled and fileExists (getHomeDir() / ".aelm" / CONF_FILENAME):
+    copyFile(getHomeDir() / ".aelm" / CONF_FILENAME, module.root / CONF_FILENAME)
+  elif fileExists (CONF_FILENAME):
+    copyFile(CONF_FILENAME, module.root / CONF_FILENAME)
 
   if (prefer module.prefer_system) or (prefer prefer_system):
     module.binpaths = @[] # passthrough PATH bin var and use system's {exeName}
@@ -1032,10 +1038,13 @@ proc addModule(desiredCategory, desiredVersion, destination: string, prefer_syst
     return
   else:
     writeFile aelmModConfName, $module
+  
+  runAelmSetupCommands(module, phase="presetup")
+  runAelmSetupCommands(module, phase="setup")
 
   runAelmScriptCommands module
-  
-  runAelmSetupCommands module
+
+  runAelmSetupCommands(module, phase="postsetup")
 
   removeAelmDownloads module
 
@@ -1384,7 +1393,9 @@ proc doCheckPackage =
         writeFile aelmModConfName, $module
         runAelmDownloadsAndExpandAuto module
         expandPlaceholders module
-        runAelmSetupCommands module
+        runAelmSetupCommands(module, phase="presetup")
+        runAelmSetupCommands(module, phase="setup")
+        runAelmSetupCommands(module, phase="postsetup")
         # check DLs
         stdout.styledWriteLine &"{category}@{version} downloads ", fgGreen, "OK"
         # check binpaths
