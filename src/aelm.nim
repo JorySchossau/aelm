@@ -478,7 +478,7 @@ proc appCacheDir: string =
   createDir cacheDir
   return cacheDir
 
-proc download(url, destination, filename:string; useCache: bool = true) =
+proc download(url, destination, filename:string; useCache = true) =
   # returns full path to downloaded file (or cached file)
   if useCache:
     let filepath = appCacheDir() / filename
@@ -658,55 +658,83 @@ proc getAelmModule(repo: AelmRepo, category, version: string): AelmModule =
   
   return env
 
-proc tarxUncompress(filepath, dstpath: string) =
+proc tarxUncompress(filepath, dstDirPath: string) =
   if not ".tar .gz .taz .tgz .bz2 .xz".split.anyIt(filepath.endsWith it):
     writeError("Error: ", &"Unrecognized compressed type for {filepath}")
-  createDir dstpath
-  let cmdresult = execCmdEx(&"tar xf {filepath} -C {dstpath}", options={poEvalCommand, poStdErrToStdOut, poUsePath})
+  createDir dstDirPath
+  let cmdresult = execCmdEx(&"tar xf {filepath} -C {dstDirPath}", options={poEvalCommand, poStdErrToStdOut, poUsePath})
   if cmdresult.exitCode != 0:
-    writeError("Error: ", &"Could not extract '{filepath}' to destination '{dstpath}'")
+    writeError("Error: ", &"Could not extract '{filepath}' to destination '{dstDirPath}'")
+
+import zip/gzipfiles
+proc getExtension(name: string): string =
+  if name.endsWith ".tar.xz": ".tar.xz"
+  elif name.endsWith ".tar.gz": ".tar.gz"
+  elif name.endsWith ".tar.bz2": ".tar.bz2"
+  elif name.endsWith ".tar.7z": ".tar.7z"
+  elif name.endsWith ".tar.lz": ".tar.lz"
+  elif name.endsWith ".tar.z": ".tar.z"
+  else: name.splitFile[2]
+proc hasSupportedExtension(name: string): bool =
+  let ext = getExtension name
+  case ext:
+    of ".tar", ".taz",
+      ".tar.xz", ".tar.gz", ".tar.bz2",
+      ".tar.7z", ".tar.lz", ".tar.z",
+      ".tgz", ".gz", ".zip":
+      return true
+    else:
+      return false
 
 # TODO rewrite decompression to use only zippy for zip (if it works), and zstd for zst, and CLI tar for all else
-proc uncompress(filepath, dstpath: string) =
+proc uncompress(filePath, dstPath: string) =
   const SUPPORTED_EXTENSIONS = ".zst .tar .gz .taz .tgz .xz .zip".split
-  createDir dstpath
+  createDir dstPath
   var
-    osfilepath = dup(filepath, normalizePath)
-    osdstpath = dup(dstpath, normalizePath)
-    resulting_file = osdstpath
+    srcFilePath = dup(filePath, normalizePath)
+    dstDirPath = dup(dstPath, normalizePath)
+    dstFilePath: string
   # first, un-zst if necessary
-  if osfilepath.endsWith ".zst":
-    let (_,filename,ext) = osfilepath.splitFile
-    if ext in SUPPORTED_EXTENSIONS: echo &"uncompressing {filename}{ext} ..."
-    let innerfile = appCacheDir() / filename # file, has ext
-    var in_stream = newFileStream(osfilepath, fmRead)
+  if srcFilePath.endsWith ".zst":
+    let (_,mantissa,ext) = srcFilePath.splitFile
+    if ext in SUPPORTED_EXTENSIONS: echo &"uncompressing {mantissa}{ext} ..."
+    let innerfile = appCacheDir() / mantissa # file, has ext
+    var in_stream = newFileStream(srcFilePath, fmRead)
     var out_stream = newFileStream(innerfile, fmWrite)
     zstdx.decompress(in_stream, out_stream)
-    osfilepath = innerfile
+    srcFilePath = innerfile
+  ## TODO find out and use correct mantissa when deciding
+  ## on gz process - currently broken maybe
   # extract any remaining file types
-  let (_,filename,ext) = osfilepath.splitFile
-  if ext in SUPPORTED_EXTENSIONS: echo &"uncompressing {filename}{ext} ..."
+  let (_,mantissa,_) = srcFilePath.splitFile
+  let ext = getExtension srcFilePath
+  if ext in SUPPORTED_EXTENSIONS: echo &"uncompressing {mantissa}{ext} ..."
   case ext:
-    of ".tar", ".gz", ".taz", ".tgz", ".bz2", ".xz":
-      tarxUncompress(osfilepath, osdstpath)
-      resulting_file = osdstpath # dir, has no ext
+    of ".tgz", ".gz":
+      let gzfilestream = newGzFileStream(srcFilePath)
+      let content = gzfilestream.readAll
+      close gzfilestream
+      (dstDirPath / mantissa).writeFile content
+    of ".tar", ".taz", ".bz2", ".xz",
+       ".tar.xz", ".tar.gz", ".tar.bz2",
+       ".tar.7z", ".tar.lz", ".tar.z":
+         tarxUncompress(srcFilePath, dstDirPath)
     of ".zip":
       # extract to "extracted" then `move extracted/* extracted/..`
       try:
-        zipx.extractAll(osfilepath, osdstpath / "extracted") # assume extract to bin for zip
+        zipx.extractAll(srcFilePath, dstDirPath / "extracted") # assume extract to bin for zip
       except ZippyError as e:
         if not e.msg.endsWith "already exists":
           writeError("Error: ", e.msg)
           quit(1)
-      for item in walkDir(osdstpath / "extracted"):
+      for item in walkDir(dstDirPath / "extracted"):
         if item.kind in {pcFile,pcLinkToFile}:
-          moveFile(item.path, osdstpath / item.path.extractFilename)
+          moveFile(item.path, dstDirPath / item.path.extractFilename)
         elif item.kind in {pcDir,pcLinkToDir}:
-          moveDir(item.path, osdstpath / item.path.extractFilename)
-      removeDir osdstpath / "extracted"
-      resulting_file = osdstpath # dir, has no ext
+          moveDir(item.path, dstDirPath / item.path.extractFilename)
+      removeDir dstDirPath / "extracted"
     else:
-      writeError("Error: ", &"Unknown file extension '{ext}' of {filename}")
+      writeError("Error: ", &"Unknown file extension '{ext}' of {mantissa}")
 
 proc addPathAndEnvvarsFromPath(dirName:string) =
   var env = loadAelmModule dirName
@@ -806,9 +834,15 @@ proc runAelmScriptCommands(env: AelmModule) =
   runAelmScriptCommands(script, env.root)
 
 proc inferBinPathForName(path, name: string): string =
+  var firstExecutablePath: string
+  # try searching by guessing exe name is same as package category name
   for file in walkDirRec(path, yieldFilter={pcFile}, relative=true):
     if name == file.extractFilename:
       return fmt"{{root}}/{file.parentDir}".strip(chars={'/'})
+    if fpUserExec in (path / file).getFilePermissions and firstExecutablePath.len == 0:
+      firstExecutablePath = file
+  # default to guess by assuming bin path == first executable file path
+  return fmt"{{root}}/{firstExecutablePath.parentDir}".strip(chars={'/'})
 
 proc runAelmDownloadsAndExpandAuto(env: var AelmModule) =
   let dirPath = env.root
@@ -831,15 +865,21 @@ proc runAelmDownloadsAndExpandAuto(env: var AelmModule) =
     let url = inferrence.candidates[0]
     let filename = url.splitPath.tail
     filePath = dirPath / filename
+    let uncompressFlag = url.extractFilename.hasSupportedExtension
     try:
       download(url=url, destination=dirPath, filename=filename)
-      env.downloads.add Download(url:url)
+      env.downloads.add Download(url:url, uncompress:uncompressFlag)
     except Exception as e:
       writeError("Error: ", &"Failed to download {url}")
       echo       "       " & e.msg
       quit(1)
-    if anyIt(".zst .tar .gz .taz .tgz .xz .zip".split, filename.endsWith it):
+    if filename.hasSupportedExtension:
       uncompress(filePath, dirPath)
+      let wasGzipped = filename.getExtension == ".gz"
+      if wasGzipped:
+        # assume gzipped file should be named {category}
+        moveFile dirPath / filename.dup(removeSuffix(".gz")), dirPath / env.category
+        (dirPath / env.category).setFilePermissions {fpUserExec}
       let inferredBinPath = inferBinPathForName(path=dirPath, name=env.category)
       env.binpaths = @[inferredBinPath]
     else:
@@ -865,11 +905,14 @@ proc runAelmDownloadsAndExpandAuto(env: var AelmModule) =
       quit(1)
     if dl.uncompress:
       uncompress(filePath, dirPath)
+    else:
+      setFilePermissions(filePath, {fpUserExec})
 
 proc removeAelmDownloads(env: AelmModule) =
   let dirPath = env.root
   var filePath: string
   for dl in env.downloads:
+    if not dl.uncompress: continue
     filePath = dirPath / dl.name
     try:
       removeFile filePath
@@ -1179,7 +1222,6 @@ proc doClearCache =
         getFileSize filePath
   let filecount = len sizes
   let total = sizes.foldl(a + b) div (1_024*1_024)
-  echo "(fake deleting files...)"
   removeDir cache
   if total < 1_024: echo &"{total} MB removed ({filecount} files)"
   else: echo &"{total div 1_024} GB removed ({filecount} files)"
@@ -1300,6 +1342,11 @@ $name:
   fmt"{getCurrentDir() / name}.aelm.yaml".writeFile content
   writeSuccess("Created package ", &"{getCurrentDir() / name}.aelm.yaml")
 
+proc findExesInDir(path: string): seq[string] =
+  for file in walkDirRec(path, {pcFile}):
+    if fpUserExec in file.getFilePermissions:
+      result.add file.extractFilename
+
 proc doCheckPackage =
   let name = packageArgs[1].dup(removeSuffix(".aelm.yaml")) & ".aelm.yaml"
   let path = getCurrentDir() / name
@@ -1333,22 +1380,24 @@ proc doCheckPackage =
         runAelmSetupCommands module
         # check DLs
         stdout.styledWriteLine &"{category}@{version} downloads ", fgGreen, "OK"
-        # default to root binpath if blank binpath found
-        #if module.binpaths.len.bool and module.binpaths[0] == "":
-        #  module.binpaths[0] = module.root
         # check binpaths
         var foundExe = not module.binpaths.len.bool
+        var exeNames: seq[string]
         for binpath in module.binpaths:
           if binpath.len == 0: continue
           let originalDir = getCurrentDir()
           setCurrentDir binpath
           if findExe(&"./{category}").startsWith("./"):
             foundExe = true
+          if not foundExe:
+            exeNames.add findExesInDir binpath
           setCurrentDir originalDir
         if foundExe:
           stdout.styledWriteLine &"{category}@{version} binpaths ", fgGreen, "OK"
+        elif exeNames.len.bool:
+          stdout.styledWriteLine &"{category}@{version} binpaths ", fgGreen, "OK", " (", exeNames.join(","), ")"
         else:
-          stdout.styledWriteLine fgYellow, &"{category}@{version} executable '{category}' NOT FOUND in bin paths (maybe this is okay?)"
+          stdout.styledWriteLine fgYellow, &"{category}@{version} executables NOT FOUND in bin paths (maybe this is okay?)"
     try:
       removeDir TestDir
     except OSError as e:

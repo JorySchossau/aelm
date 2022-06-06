@@ -70,17 +70,18 @@ proc getLatestAssetsGithub(repo, version: string): seq[string] =
   let html = fetch(&"{repo}/releases/{version}")
   for item in html.q.select("div svg.octicon + a"):
     result.add "https://github.com" & item.attr("href")
-  result.keepItIf((not it.endsWith ".sha256") and (not it.endsWith ".sha256sum") and (not it.endsWith ".deb") and (not it.endsWith ".rpm") and ("archive/refs/tags" notin it))
+  result.keepItIf((not it.endsWith ".sha256") and (not it.endsWith ".sha256sum") and (not it.endsWith ".deb") and (not it.endsWith ".rpm") and (not it.endsWith ".apk") and ("archive/refs/tags" notin it))
 
 proc getLatestAssetsGeneric(repo: string): seq[string] =
   let html = fetch(repo)
   for item in html.q.select("a"):
     result.add repo & '/' & item.attr("href")
-  result.keepItIf((not it.endsWith ".sha256") and (not it.endsWith ".sha256sum") and (not it.endsWith ".deb") and (not it.endsWith ".rpm") and (it.extractFilename.contains('.')))
+  result.keepItIf((not it.endsWith ".sha256") and (not it.endsWith ".sha256sum") and (not it.endsWith ".deb") and (not it.endsWith ".rpm") and (not it.endsWith ".apk") and (it.extractFilename.contains('.')))
 
 proc getDLCandidates*(repo, version: string): InferredDownload =
   let url = repo.strip(chars={'/'})
   const GH = "https://github.com"
+  const GEA = "https://gitea.com"
   let assets = block:
     if url.startsWith GH: getLatestAssetsGithub url, version
     else: getLatestAssetsGeneric url

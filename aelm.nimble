@@ -18,3 +18,4 @@ requires "puppy >= 1.5.3"
 # for dlinfer.nim
 requires "q >= 0.0.8"
 requires "regex >= 0.19.0"
+requires "zip >= 0.3.1"
