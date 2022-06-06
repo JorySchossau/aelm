@@ -333,7 +333,7 @@ root: {env.root}
     result.add "\nenvvars:\n"
     for key,value in env.envvars:
       result.add &"  {key}: '{value}'\n"
-  if env.testcmd.len.bool: result.add "testcmd: {env.testcmd}\n"
+  if env.testcmd.len.bool: result.add &"testcmd: {env.testcmd}\n"
   result.add "\n# End of settings that still have an effect on this module."
   result.add "\n# The below information is included as a record of this module's origin.\n"
   result.add "\n"
