@@ -555,9 +555,10 @@ proc doInit =
   let repo = helperLoadAelmRepo filePath
   echo &"{repo.keys.toSeq.len} items in new repository"
 
-proc loadAelmRepo: AelmRepo =
+proc loadAelmRepo(path = ""): AelmRepo =
   let filePath = block:
-    if userEnabled: getHomeDir() / ".aelm" / CONF_FILENAME
+    if path.len.bool: path
+    elif userEnabled: getHomeDir() / ".aelm" / CONF_FILENAME
     else: getCurrentDir() / CONF_FILENAME
   if not fileExists filePath:
     writeWarning("Warning: ", &"no repo file found in '{filePath}'")
@@ -925,20 +926,51 @@ proc removeAelmDownloads(env: AelmModule) =
     except OSError:
       writeError("Error: ",&"Could not remove file after using {filePath}")
 
-proc addModule(category, version, destination: string, prefer_system: seq[string]) =
-  let repo = loadAelmRepo()
-  var module = repo.getAelmModule(category=category, version=version)
+proc addModule(desiredCategory, desiredVersion, destination: string, prefer_system: seq[string], repofile = "") =
+  var
+    repo: AelmRepo
+    module: AelmModule
+    resultingVersion: string
+    resultingDestination: string
+    category = desiredCategory
+    version = desiredVersion
 
-  # Unavailable
-  if module.unavailable.len.bool:
-    writeWarning("Unavailable for this OS:\n", module.unavailable)
-    quit(1)
-  
+  # if repofile was provided, then load the first module in that file
+  # otherwise assume we are using the global repo and must pay attention
+  # to the specified category and version
+  if repofile.len.bool:
+    repo = loadAelmRepo(repofile)
+    let catvers = getCategoriesAndVersions repo
+    if catvers.keys.toSeq.len == 0:
+      writeError("Error: ", "No categories defined for repo file")
+      quit(1)
+    let (discoveredCategory,discoveredVersions) = catvers.pairs.toSeq[0]
+    if discoveredVersions.len == 0:
+      writeError("Error: ", "No versions defined for repo file")
+      quit(1)
+    category = discoveredCategory
+    version = discoveredVersions[0]
+    module = repo.getAelmModule(category=category, version=version)
+  else:
+    repo = loadAelmRepo()
+    module = repo.getAelmModule(category=category, version=version)
+
+    # Unavailable
+    if module.unavailable.len.bool:
+      writeWarning("Unavailable for this OS:\n", module.unavailable)
+      quit(1)
+    
   # the resulting version might be latest if was blank
   # the resulting destination will be {category}@{resultingVersion} if was blank
-  let resultingVersion = module.version
-  var resultingDestination = block:
-    if destination.len == 0: &"{category}@{resultingVersion}"
+  resultingVersion = module.version
+  # if user did not specify destination,
+  # Then in order: {category}, {category}@{version}, skip add if last one exists
+  resultingDestination = block:
+    if destination.len == 0:
+      if dirExists category:
+        writeWarning(&"{category} already exists, trying {category}@{resultingVersion}")
+        &"{category}@{resultingVersion}"
+      else: category
     else: destination
 
   echo &"Installing {category}..."
@@ -1114,6 +1146,16 @@ proc doAdd =
   if prefer_systemEnabled and addArgs.len > 1:
     writeError("Error: ", "Use add command one name at a time to use --prefer-system")
     quit(1)
+  # perform repo file additions if first argument is repo file
+  # otherwise perform normal aelm add commands
+  let repoFileSpecified = fileExists addArgs[0]
+  if repoFileSpecified:
+    let prefer_system_list = prefer_systemArgs . join("") . replace(';',',') . split(',') . filterIt(it.len.bool)
+    for filePath in addArgs:
+      addModule("", "", "", prefer_system_list, repofile = filePath)
+    quit(0)
+
+  # default to normal aelm module add
   for (category, version, nickname) in addArgs.mapIt it.getPackageTriplet:
     let prefer_system_list = prefer_systemArgs . join("") . replace(';',',') . split(',') . filterIt(it.len.bool)
     addModule(category, version, nickname, prefer_system_list)
