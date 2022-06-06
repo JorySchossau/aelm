@@ -770,6 +770,8 @@ proc addPathAndEnvvarsFromPath(dirName:string) =
       newPath.add os.getEnv("PATH","")
       os.putEnv("PATH", newPath)
   # update ENVVARS
+  if env.envvars.len.bool:
+    echo "configuring environment variables"
   for key,value in env.envvars:
       # concatenate var contents if variable name ends in PATH
       # otherwise prefer existing environment contents if exist
@@ -1213,7 +1215,6 @@ proc doExec =
     cmd = block:
       when not defined(windows): execArgs[1..^1].join(" ")
       else: "powershell -c \"" & execArgs[1..^1].join(" ") & "\""
-      #else: "cmd /c "          & execArgs[1..^1].join(" ")
   addPathAndEnvvarsFromPath envPath
   for connection in env.connections:
     addPathAndEnvvarsFromPath(envParentPath / connection)
