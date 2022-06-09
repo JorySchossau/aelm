@@ -23,6 +23,7 @@ from dlinfer import InferredConfidence, InferredDownload, getDLCandidates
 from std/sugar import dup, collect, `=>`
 import zstd/decompress as zstdx
 import zippy/ziparchives as zipx
+from zippy import uncompress
 when defined(windows):
   import std/registry
 
@@ -701,7 +702,6 @@ proc hasSupportedExtension(name: string): bool =
     else:
       return false
 
-# TODO rewrite decompression to use only zippy for zip (if it works), and zstd for zst, and CLI tar for all else
 proc uncompress(filePath, dstPath: string) =
   const SUPPORTED_EXTENSIONS = ".zst .tar .gz .taz .tgz .xz .zip".split
   createDir dstPath
@@ -725,12 +725,14 @@ proc uncompress(filePath, dstPath: string) =
   let ext = getExtension srcFilePath
   if ext in SUPPORTED_EXTENSIONS: echo &"uncompressing {mantissa}{ext} ..."
   case ext:
-    of ".tgz", ".gz":
-      let gzfilestream = newGzFileStream(srcFilePath)
-      let content = gzfilestream.readAll
-      close gzfilestream
-      (dstDirPath / mantissa).writeFile content
-    of ".tar", ".taz", ".bz2", ".xz",
+    of ".gz":
+      try:
+        let content = srcFilePath.readFile.uncompress
+        (dstDirPath / mantissa).writeFile content
+      except:
+        writeError("Error: ", &"Could not read and uncompress file '{srcFilePath}'")
+        quit(1)
+    of ".tar", ".taz", ".bz2", ".xz", ".tgz",
        ".tar.xz", ".tar.gz", ".tar.bz2",
        ".tar.7z", ".tar.lz", ".tar.z":
          tarxUncompress(srcFilePath, dstDirPath)
