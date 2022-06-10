@@ -901,7 +901,7 @@ proc runAelmDownloadsAndExpandAuto(env: var AelmModule) =
       if wasGzipped:
         # assume gzipped file should be named {category}
         moveFile dirPath / filename.dup(removeSuffix(".gz")), dirPath / env.category
-        (dirPath / env.category).setFilePermissions {fpUserExec}
+        (dirPath / env.category).setFilePermissions {fpUserExec, fpUserWrite, fpUserRead}
       let inferredBinPath = inferBinPathForName(path=dirPath, name=env.category)
       env.binpaths = @[inferredBinPath]
     else:
@@ -910,7 +910,7 @@ proc runAelmDownloadsAndExpandAuto(env: var AelmModule) =
       if filePath.extractFilename != env.category:
         moveFile(filePath, newFilePath)
       env.downloads[^1].uncompress = false
-      newFilePath.setFilePermissions {fpUserExec}
+      newFilePath.setFilePermissions {fpUserExec, fpUserRead, fpUserWrite}
       env.binpaths = @["{root}"]
     return
   # process `downloads` field
@@ -928,7 +928,7 @@ proc runAelmDownloadsAndExpandAuto(env: var AelmModule) =
     if dl.uncompress:
       uncompress(filePath, dirPath)
     else:
-      setFilePermissions(filePath, {fpUserExec})
+      setFilePermissions(filePath, {fpUserExec, fpUserRead, fpUserWrite})
 
 proc removeAelmDownloads(env: AelmModule) =
   let dirPath = env.root
