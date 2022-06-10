@@ -804,7 +804,7 @@ proc runAelmSetupCommands(srcEnv: AelmModule, phase: static string) =
   tasks = tasks.filterIt(it.len.bool).filterIt(not it.startsWith "#")
   addPathAndEnvvarsFromPath(env.root)
   # the tasks that remain are all valid shell commands
-  echo "running setup commands..."
+  echo fmt"running {phase} commands..."
   for task in tasks: echo task
   if tasks.len == 0: return
   let cmdstring = block:
