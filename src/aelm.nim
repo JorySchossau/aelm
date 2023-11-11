@@ -15,8 +15,9 @@ import std/[json, sequtils, strutils, tables, strformat, os, osproc, sets, algor
 from std/os import getHomeDir, createDir, getCurrentDir, setCurrentDir, setFilePermissions, walkDirRec, parentDir
 from puppy import fetch, PuppyError
 from std/rdstdin import readLineFromStdin # for stdin piping
-import yaml/serialization, streams
-from yaml import YamlParserError, YamlLoadingError
+import yaml, streams
+from yaml/parser import YamlParserError
+from yaml/data import YamlLoadingError
 from terminal import styledWriteLine, resetStyle, fgGreen, fgYellow, fgRed, styleDim, styleBright
 from dl import syncDownload
 from dlinfer import InferredConfidence, InferredDownload, getDLCandidates

@@ -4,7 +4,7 @@ from os import fileExists, extractFilename, findExe
 from strutils import strip, contains, join, endsWith, startsWith
 from sequtils import mapIt, filterIt, keepItIf
 from strformat import `&`
-from regex import re, match, Regex
+from regex import re2, match, Regex2
 
 type OS {.pure.} = enum
   win
@@ -12,19 +12,19 @@ type OS {.pure.} = enum
   nix
 
 type Pattern = object
-  positive, negative, priority: Regex
+  positive, negative, priority: Regex2
 
 const MatchByOS = [
   Pattern( # win
-    positive: re".*(?i)([^r]win|windows).*"
+    positive: re2(".*(?i)([^r]win|windows).*")
     ),
   Pattern( #nix
-    positive: re".*(?i)(darwin|mac.?os|osx).*"
+    positive: re2(".*(?i)(darwin|mac.?os|osx).*")
     ),
   Pattern( #mac
-    positive: re".*(?i)(linux).*",
-    negative: re".*(?i)(android).*", #mac
-    priority: re".*\.appimage$"
+    positive: re2(".*(?i)(linux).*"),
+    negative: re2(".*(?i)(android).*"), #mac
+    priority: re2(""".*\.appimage$""")
     )
 ]
 
@@ -33,8 +33,8 @@ type Arch {.pure.} = enum
   arm64
 
 const MatchByArch = [
-  Pattern(positive: re".*(?i)(x64|amd64|x86(-|_)?64).*"),
-  Pattern(positive: re".*(?i)(arm64|armv8|aarch64).*")
+  Pattern(positive: re2(".*(?i)(x64|amd64|x86(-|_)?64).*")),
+  Pattern(positive: re2(".*(?i)(arm64|armv8|aarch64).*"))
 ]
 
 type InferredConfidence* = enum
