@@ -50,44 +50,44 @@ jobs:
           tag: latest
           overwrite: true
 
-  build-old-win:
-    runs-on: ubuntu-latest
-    if: ${{ contains(github.event.head_commit.message, 'new release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildoldwin == 'true') }}
-    steps:
-      - uses: actions/checkout@v3
-      #- uses: ilammy/msvc-dev-cmd@v1
-      #- uses: egor-tensin/setup-mingw@v2
-      #  with:
-      #    platform: x64
-      - uses: jiro4989/setup-nim-action@v1
-        with:
-          nim-version: '2.0.0' # default is 'stable'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-            #- run: nimble build -Y
-      #- name: Add Nim Path
-      #  run: echo "$HOME/.nimble/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - name: Test Nim
-        run: nim -v
-      - name: dependencies
-        run: nimble install -d -Y
-      - name: cross compiler
-        run: nimble install https://github.com/iffy/nimxc.git
-      - name: build
-        run: nimxc c -d:mingw --target windows-amd64 src/aelm
-      - name: Run UPX
-        uses: crazy-max/ghaction-upx@v1
-        with:
-          version: latest
-          files: ./src/aelm.exe
-          args: --best -q
-      - name: Upload Windows Binary
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: src/aelm.exe
-          asset_name: aelm-win-x64.exe
-          tag: latest
-          overwrite: true
+  #build-old-win:
+  #  runs-on: ubuntu-latest
+  #  if: ${{ contains(github.event.head_commit.message, 'new release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.buildoldwin == 'true') }}
+  #  steps:
+  #    - uses: actions/checkout@v3
+  #    #- uses: ilammy/msvc-dev-cmd@v1
+  #    #- uses: egor-tensin/setup-mingw@v2
+  #    #  with:
+  #    #    platform: x64
+  #    - uses: jiro4989/setup-nim-action@v1
+  #      with:
+  #        nim-version: '2.0.0' # default is 'stable'
+  #        repo-token: ${{ secrets.GITHUB_TOKEN }}
+  #          #- run: nimble build -Y
+  #    #- name: Add Nim Path
+  #    #  run: echo "$HOME/.nimble/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+  #    - name: Test Nim
+  #      run: nim -v
+  #    - name: dependencies
+  #      run: nimble install -d -Y
+  #    - name: cross compiler
+  #      run: nimble install https://github.com/iffy/nimxc.git
+  #    - name: build
+  #      run: nimxc c -d:mingw --target windows-amd64 src/aelm
+  #    - name: Run UPX
+  #      uses: crazy-max/ghaction-upx@v1
+  #      with:
+  #        version: latest
+  #        files: ./src/aelm.exe
+  #        args: --best -q
+  #    - name: Upload Windows Binary
+  #      uses: svenstaro/upload-release-action@v2
+  #      with:
+  #        repo_token: ${{ secrets.GITHUB_TOKEN }}
+  #        file: src/aelm.exe
+  #        asset_name: aelm-win-x64.exe
+  #        tag: latest
+  #        overwrite: true
   build-linux:
     runs-on: ubuntu-latest
     container:
