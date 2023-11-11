@@ -199,7 +199,7 @@ jobs:
           chmod +x zig/gcc
       - name: Nimble Deps
         #if: steps.cache-nim.outputs.cache-hit != 'true'
-        run: nimble install -Y
+        run: nimble install -d -Y
         #run: |
         #  nimble install -y yaml
         #  nimble install -y zstd
