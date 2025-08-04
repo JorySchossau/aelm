@@ -6,6 +6,29 @@ from sequtils import mapIt, filterIt, keepItIf
 from strformat import `&`
 from regex import re2, match, Regex2
 
+# This section defines the regex patterns used to identify the correct download asset
+# for a given operating system and architecture from a list of release assets.
+# The patterns are designed to be easily extensible to support new platforms.
+
+# OS-specific patterns
+const
+  # Windows: Matches "win" or "windows" (case-insensitive)
+  WIN_REGEX = re2(".*(?i)([^r]win|windows).*")
+  # macOS: Matches "darwin", "macos", or "osx" (case-insensitive)
+  MAC_REGEX = re2(".*(?i)(darwin|mac.?os|osx).*")
+  # Linux: Matches "linux" (case-insensitive), excludes "android"
+  NIX_REGEX = re2(".*(?i)(linux).*")
+  NIX_EXCLUDE_REGEX = re2(".*(?i)(android).*")
+  # AppImage: Prioritized for Linux
+  APPIMAGE_REGEX = re2(""".*\.appimage$""")
+
+# Architecture-specific patterns
+const
+  # x86-64: Matches "x64", "amd64", or "x86_64" (case-insensitive)
+  X64_REGEX = re2(".*(?i)(x64|amd64|x86(-|_)?64).*")
+  # ARM64: Matches "arm64", "armv8", or "aarch64" (case-insensitive)
+  ARM64_REGEX = re2(".*(?i)(arm64|armv8|aarch64).*")
+
 type OS {.pure.} = enum
   win
   mac
@@ -16,15 +39,15 @@ type Pattern = object
 
 const MatchByOS = [
   Pattern( # win
-    positive: re2(".*(?i)([^r]win|windows).*")
+    positive: WIN_REGEX
     ),
   Pattern( #nix
-    positive: re2(".*(?i)(darwin|mac.?os|osx).*")
+    positive: MAC_REGEX
     ),
   Pattern( #mac
-    positive: re2(".*(?i)(linux).*"),
-    negative: re2(".*(?i)(android).*"), #mac
-    priority: re2(""".*\.appimage$""")
+    positive: NIX_REGEX,
+    negative: NIX_EXCLUDE_REGEX, #mac
+    priority: APPIMAGE_REGEX
     )
 ]
 
@@ -33,8 +56,8 @@ type Arch {.pure.} = enum
   arm64
 
 const MatchByArch = [
-  Pattern(positive: re2(".*(?i)(x64|amd64|x86(-|_)?64).*")),
-  Pattern(positive: re2(".*(?i)(arm64|armv8|aarch64).*"))
+  Pattern(positive: X64_REGEX),
+  Pattern(positive: ARM64_REGEX)
 ]
 
 type InferredConfidence* = enum
