@@ -1,4 +1,4 @@
-# TODO 
+# TODO
 # * split out repo into separate config files
 # * create github repo
 # * create packages github repo
@@ -18,7 +18,7 @@ from puppy import fetch, PuppyError
 from std/rdstdin import readLineFromStdin # for stdin piping
 from terminal import styledWriteLine, resetStyle, fgGreen, fgYellow, fgRed, styleDim, styleBright
 from dl import syncDownload
-from dlinfer import InferredConfidence, InferredDownload, getDLCandidates
+from dlinfer import InferredAssets, getDLCandidates, getAssetForCurrentPlatform, extractToolName
 from std/sugar import dup, collect, `=>`
 import zstd/decompress as zstdx
 import zippy/ziparchives as zipx
@@ -90,6 +90,7 @@ registerArg(clearTheEntireCache, aliases = ["clear-cache"])
 # `add` arguments
 registerArg(ignore_system, aliases = ["ignore-system"]) # TODO what was this for?
 registerArg(prefer_system, nargs = 1, aliases = ["prefer-system"])
+registerArg(dry_run, aliases = ["dry-run"])
 #registerArg(not_module, nargs = 1, aliases = ["not"])
 
 const
@@ -324,6 +325,10 @@ proc appCacheDir: string =
   return cacheDir
 
 proc download(url, destination, filename:string; useCache = true) =
+  if dry_runEnabled:
+    echo "downloading " & url
+    echo "(dry run mode - not downloading)"
+    quit(0)
   # returns full path to downloaded file (or cached file)
   if useCache:
     let filepath = appCacheDir() / filename
@@ -419,7 +424,7 @@ proc sortVersions(versions: var seq[string]) =
       else: return 0
     return 0
   proc moveToEndIfExist(s: var seq[string], t: string) =
-    if t in s: 
+    if t in s:
       s.add t
       s.delete s.find(t)
   var asciiVersions: seq[string]
@@ -445,7 +450,7 @@ proc getCategoriesAndVersions(repo: AelmRepo): Table[string, seq[string]]=
 
 proc getAelmModule(repo: AelmRepo, category, version: string): AelmModule =
   var env: AelmModule
-  
+
   if category notin repo:
     writeError("Error: ", &"Not a valid category '{category}'. Options are:\n" & join(repo.keys.toSeq,"\n").indent(2))
     quit(1)
@@ -482,7 +487,7 @@ proc getAelmModule(repo: AelmRepo, category, version: string): AelmModule =
         env.update `repoCatVersion`.`os`
 
   env.updateByOS repo[category].versions[guessedVersion]
-  
+
   return env
 
 proc tarxUncompress(filepath, dstDirPath: string) =
@@ -567,7 +572,7 @@ proc uncompress(filePath, dstPath: string) =
 proc addPathAndEnvvarsFromPath(dirName:string) =
   var env = loadAelmModule dirName
   let replacements = aelmReplacementPairsFromAelmEnv env
-  
+
   # expand all placeholders
   expandPlaceholders env
 
@@ -685,17 +690,22 @@ proc runAelmDownloadsAndExpandAuto(env: var AelmModule) =
   var filename: string
   # process `auto` field
   if env.auto.len.bool:
-    var inferrence: InferredDownload
+    var inferrence: InferredAssets
     try:
       inferrence = getDLCandidates(env.auto, env.version)
     except PuppyError as e:
       writeError("Error: ", &"Unable to download {env.category}@{env.version}")
       echo e.msg
       quit(1)
-    if inferrence.candidates.len == 0:
+    if inferrence.assets.len == 0:
       writeError("Error: ", &"No download candidates found for '{env.auto}'")
       quit(1)
-    let url = inferrence.candidates[0]
+    # choose best asset for the current platform
+    let current = getAssetForCurrentPlatform(inferrence)
+    if current.confidence <= 0 or current.url.len == 0:
+      writeError("Error: ", &"No suitable asset found for current platform from '{env.auto}'")
+      quit(1)
+    let url = current.url
     let filename = url.splitPath.tail
     filePath = dirPath / filename
     let uncompressFlag = url.extractFilename.hasSupportedExtension
@@ -753,6 +763,118 @@ proc removeAelmDownloads(env: AelmModule) =
     except OSError:
       writeError("Error: ",&"Could not remove file after using {filePath}")
 
+proc writeActivationScripts(env: AelmModule, destRoot: string) =
+  if env.binpaths.len.bool:
+    var
+      activationFilename = ""
+      deactivationFilename = ""
+      scriptActivate = ""
+      scriptDeactivate = ""
+    when defined(windows):
+      activationFilename = destRoot / "activate" & ".bat"
+      deactivationFilename = destRoot / "deactivate" & ".bat"
+      for bin in env.binpaths:
+        scriptActivate.add ACTIVATE_SCRIPT_WINDOWS.replace(sub="{bin}", by=bin)
+        scriptDeactivate.add DEACTIVATE_SCRIPT_WINDOWS.replace(sub="{bin}", by=bin)
+      scriptActivate.add env.getEnvCtorString("set $#=$#\n")
+      scriptDeactivate.add env.getEnvDtorString("set $#=\n")
+      writeFile activationFilename, scriptActivate
+      writeFile deactivationFilename, scriptDeactivate
+      scriptActivate = ""
+      scriptDeactivate = ""
+      activationFilename = destRoot / "activate" & ".ps1"
+      deactivationFilename = destRoot / "deactivate" & ".ps1"
+      for bin in env.binpaths:
+        scriptActivate.add ACTIVATE_SCRIPT_PS.replace(sub="{bin}", by=bin)
+        scriptDeactivate.add DEACTIVATE_SCRIPT_PS.replace(sub="{bin}", by=bin)
+      scriptActivate.add env.getEnvCtorString("$${env:$#}=\"$#\"\n")
+      scriptDeactivate.add env.getEnvDtorString("$${env:$#}=\"\"\n")
+      writeFile activationFilename, scriptActivate
+      writeFile deactivationFilename, scriptDeactivate
+    else:
+      activationFilename = destRoot / "activate"
+      deactivationFilename = destRoot / "deactivate"
+      for bin in env.binpaths:
+        scriptActivate.add ACTIVATE_SCRIPT_LINUX.replace(sub="{bin}", by=bin)
+        scriptDeactivate.add DEACTIVATE_SCRIPT_LINUX.replace(sub="{bin}", by=bin)
+      scriptActivate.add env.getEnvCtorString("export $#=\"$#\"\n")
+      scriptDeactivate.add env.getEnvDtorString("export $#=\n")
+      writeFile activationFilename, scriptActivate
+      writeFile deactivationFilename, scriptDeactivate
+
+type
+  InstallOptions* = object
+    prefer_system*: seq[string]
+    dryRun*: bool
+    forceOverwrite*: bool
+    user*: bool
+
+proc finalizeInstall(module: var AelmModule, opts: InstallOptions) =
+  # Seed base conf and write module conf (approximate minimal 'auto' module behavior)
+  expandPlaceholders module
+  let aelmModConfName = module.root / CONF_MOD_FILENAME
+  if user_enabled and fileExists (getHomeDir() / ".aelm" / CONF_FILENAME):
+    copyFile(getHomeDir() / ".aelm" / CONF_FILENAME, module.root / CONF_FILENAME)
+  elif fileExists (CONF_FILENAME):
+    copyFile(CONF_FILENAME, module.root / CONF_FILENAME)
+  writeFile aelmModConfName, $module
+  # Run setup phases and scripts
+  runAelmSetupCommands(module, phase="presetup")
+  runAelmSetupCommands(module, phase="setup")
+  runAelmScriptCommands module
+  runAelmSetupCommands(module, phase="postsetup")
+  # Remove downloaded archives
+  removeAelmDownloads module
+  # Generate activation/deactivation scripts like normal module installs
+  writeActivationScripts(module, module.root)
+  # Register module for --user installs
+  if opts.user:
+    var userModules = readUserInstalledModules()
+    userModules.incl &"{module.category}@{module.version}"
+    writeUserInstalledModules userModules
+    writeSuccess("Installed: ", &"Restart your shell to enable {module.category}@{module.version}\n           Or type: source " & (getHomeDir() / ".aelm" / "activate"))
+
+proc prepareModuleRootAndName*(env: var AelmModule, dest: string) =
+  env.root = (getCurrentDir() / dest).dup(normalizePath)
+  env.name = dest
+  echo &"Installing {env.category}..."
+
+proc installResolvedModule(module: var AelmModule, opts: InstallOptions) =
+  proc prefer(preferences: seq[string]): bool =
+    if ignoreSystemEnabled: return false
+    for exeName in preferences:
+      if findExe(exeName).len != 0:
+        echo &"(module prefers using system's existing {exeName})"
+        return true
+
+  # Download/infer
+  expandPlaceholders module
+  runAelmDownloadsAndExpandAuto module
+  expandPlaceholders module
+
+  # Early exit if preferring system tools
+  if (prefer module.prefer_system) or (prefer opts.prefer_system):
+    let aelmModConfName = module.root / CONF_MOD_FILENAME
+    # Seed with base conf into module root if present
+    if user_enabled and fileExists (getHomeDir() / ".aelm" / CONF_FILENAME):
+      copyFile(getHomeDir() / ".aelm" / CONF_FILENAME, module.root / CONF_FILENAME)
+    elif fileExists (CONF_FILENAME):
+      copyFile(CONF_FILENAME, module.root / CONF_FILENAME)
+    module.binpaths = @[] # passthrough PATH bin var and use system's {exeName}
+    module.downloads.setLen 0
+    module.presetup = ""
+    module.setup = ""
+    module.postsetup = ""
+    module.aelmscript = ""
+    module.testcmd = ""
+    module.envvars.clear
+    module.description = ""
+    writeFile aelmModConfName, $module
+    return
+
+  # Finish installation via shared routine
+  finalizeInstall(module, opts)
+
 proc addModule(desiredCategory, desiredVersion, destination: string, prefer_system: seq[string], repofile = "") =
   var
     repo: AelmRepo
@@ -786,7 +908,7 @@ proc addModule(desiredCategory, desiredVersion, destination: string, prefer_syst
     if module.unavailable.len.bool:
       writeWarning("Unavailable for this OS:\n", module.unavailable)
       quit(1)
-    
+
   # the resulting version might be latest if was blank
   # the resulting destination will be {category}@{resultingVersion} if was blank
   resultingVersion = module.version
@@ -800,11 +922,10 @@ proc addModule(desiredCategory, desiredVersion, destination: string, prefer_syst
       else: category
     else: destination
 
-  echo &"Installing {category}..."
 
-  module.root = (getCurrentDir() / resultingDestination).dup(normalizePath)
+
+  prepareModuleRootAndName(module, resultingDestination)
   module.version = resultingVersion
-  module.name = resultingDestination
 
   if dirExists(module.root): return
 
@@ -814,98 +935,7 @@ proc addModule(desiredCategory, desiredVersion, destination: string, prefer_syst
 
   createDir resultingDestination
 
-  proc prefer(preferences: seq[string]): bool =
-    if ignoreSystemEnabled: return false
-    for exeName in preferences:
-      if findExe(exeName).len != 0:
-        echo &"(module prefers using system's existing {exeName})"
-        return true
-
-  # write conf file (and and it can be referenced when running setup commands)
-  expandPlaceholders module
-
-  runAelmDownloadsAndExpandAuto module
-
-  # write conf file (and and it can be referenced when running setup commands)
-  expandPlaceholders module
-
-  let aelmModConfName = resultingDestination / CONF_MOD_FILENAME
-
-  # seed with our aelm conf
-  if user_enabled and fileExists (getHomeDir() / ".aelm" / CONF_FILENAME):
-    copyFile(getHomeDir() / ".aelm" / CONF_FILENAME, module.root / CONF_FILENAME)
-  elif fileExists (CONF_FILENAME):
-    copyFile(CONF_FILENAME, module.root / CONF_FILENAME)
-
-  if (prefer module.prefer_system) or (prefer prefer_system):
-    module.binpaths = @[] # passthrough PATH bin var and use system's {exeName}
-    module.downloads.setLen 0
-    module.presetup = ""
-    module.setup = ""
-    module.postsetup = ""
-    module.aelmscript = ""
-    module.testcmd = ""
-    module.envvars.clear
-    module.description = ""
-    writeFile aelmModConfName, $module
-    return
-  else:
-    writeFile aelmModConfName, $module
-  
-  runAelmSetupCommands(module, phase="presetup")
-  runAelmSetupCommands(module, phase="setup")
-
-  runAelmScriptCommands module
-
-  runAelmSetupCommands(module, phase="postsetup")
-
-  removeAelmDownloads module
-
-  if module.binpaths.len.bool:
-    # module activation
-    var
-      replacements = aelmReplacementPairsFromAelmEnv module
-      activationFilename = ""
-      deactivationFilename = ""
-      scriptActivate = ""
-      scriptDeactivate = ""
-    when defined(windows):
-      activationFilename = resultingDestination / "activate" & ".bat"
-      deactivationFilename = resultingDestination / "deactivate" & ".bat"
-      for bin in module.binpaths:
-        scriptActivate.add ACTIVATE_SCRIPT_WINDOWS.replace(sub="{bin}", by=bin)
-        scriptDeactivate.add DEACTIVATE_SCRIPT_WINDOWS.replace(sub="{bin}", by=bin)
-      scriptActivate.add module.getEnvCtorString("set $#=$#\n")
-      scriptDeactivate.add module.getEnvDtorString("set $#=\n")
-      writeFile activationFilename, scriptActivate
-      writeFile deactivationFilename, scriptDeactivate
-      scriptActivate = ""
-      scriptDeactivate = ""
-      activationFilename = resultingDestination / "activate" & ".ps1"
-      deactivationFilename = resultingDestination / "deactivate" & ".ps1"
-      for bin in module.binpaths:
-        scriptActivate.add ACTIVATE_SCRIPT_PS.replace(sub="{bin}", by=bin)
-        scriptDeactivate.add DEACTIVATE_SCRIPT_PS.replace(sub="{bin}", by=bin)
-      scriptActivate.add module.getEnvCtorString("$${env:$#}=\"$#\"\n")
-      scriptDeactivate.add module.getEnvDtorString("$${env:$#}=\"\"\n")
-      writeFile activationFilename, scriptActivate
-      writeFile deactivationFilename, scriptDeactivate
-    else:
-      activationFilename = resultingDestination / "activate"
-      deactivationFilename = resultingDestination / "deactivate"
-      for bin in module.binpaths:
-        scriptActivate.add ACTIVATE_SCRIPT_LINUX.replace(sub="{bin}", by=bin)
-        scriptDeactivate.add DEACTIVATE_SCRIPT_LINUX.replace(sub="{bin}", by=bin)
-      scriptActivate.add module.getEnvCtorString("export $#=\"$#\"\n")
-      scriptDeactivate.add module.getEnvDtorString("export $#=\n")
-      writeFile activationFilename, scriptActivate
-      writeFile deactivationFilename, scriptDeactivate
-    # add to user modules if --user enabled
-    if userEnabled:
-      var userModules = readUserInstalledModules()
-      userModules.incl &"{category}@{resultingVersion}"
-      writeUserInstalledModules userModules
-      writeSuccess("Installed: ", &"Restart your shell to enable {category}@{resultingVersion}\n           Or type: source " & (getHomeDir() / ".aelm" / "activate"))
+  installResolvedModule(module, InstallOptions(prefer_system: prefer_system, dryRun: dry_runEnabled, forceOverwrite: false, user: userEnabled))
 
 proc doInfo() =
   if infoArgs.len < 1:
@@ -919,7 +949,7 @@ proc doInfo() =
   if module.unavailable.len.bool:
     writeWarning("Unavailable for this OS:\n", module.unavailable)
     quit(1)
-  
+
   let downloadString = module.downloads.mapIt( "- " & it.url).join("\n").indent(4)
 
   # TODO add provenance tracking to packages/repo files
@@ -978,19 +1008,98 @@ proc doAdd =
   if prefer_systemEnabled and addArgs.len > 1:
     writeError("Error: ", "Use add command one name at a time to use --prefer-system")
     quit(1)
-  # perform repo file additions if first argument is repo file
-  # otherwise perform normal aelm add commands
-  let repoFileSpecified = addArgs[0].fileExists or addArgs[0].startsWith("http")
-  if repoFileSpecified:
-    let prefer_system_list = prefer_systemArgs . join("") . replace(';',',') . split(',') . filterIt(it.len.bool)
-    for filePath in addArgs:
-      addModule("", "", "", prefer_system_list, repofile = filePath)
-    quit(0)
 
-  # default to normal aelm module add
-  for (category, version, nickname) in addArgs.mapIt it.getPackageTriplet:
-    let prefer_system_list = prefer_systemArgs . join("") . replace(';',',') . split(',') . filterIt(it.len.bool)
-    addModule(category, version, nickname, prefer_system_list)
+  # Helper to detect URLs
+  proc isUrl(s: string): bool =
+    s.startsWith("http://") or s.startsWith("https://")
+
+  let prefer_system_list = prefer_systemArgs . join("") . replace(';',',') . split(',') . filterIt(it.len.bool)
+
+  # Helper to split argument into name/url and destination
+  proc splitNameAndDest(arg: string): (string, string) =
+    # For URLs, skip the scheme colon (http:// or https://)
+    if arg.startsWith("http://"):
+      let rest = arg[7..^1]
+      let idx = rest.find(':')
+      if idx >= 0:
+        return ("http://" & rest[0..<idx], rest[idx+1..^1])
+      else:
+        return (arg, "")
+    elif arg.startsWith("https://"):
+      let rest = arg[8..^1]
+      let idx = rest.find(':')
+      if idx >= 0:
+        return ("https://" & rest[0..<idx], rest[idx+1..^1])
+      else:
+        return (arg, "")
+    else:
+      let idx = arg.find(':')
+      if idx >= 0:
+        return (arg[0..<idx], arg[idx+1..^1])
+      else:
+        return (arg, "")
+
+  # Shared logic for constructing a minimal module from a direct URL (like minimal 'auto' module)
+  proc minimalAutoModuleFromUrl(url: string, destination: string): AelmModule =
+    var module: AelmModule
+    module.auto = url
+    module.downloads.setLen(0)
+    # Infer tool name from URL using dlinfer's extractToolName logic
+    module.category = extractToolName(url)
+    module.name = module.category
+    module.version = "latest" # Default for URL installs
+    if destination.len > 0:
+      prepareModuleRootAndName(module, destination)
+    else:
+      prepareModuleRootAndName(module, module.category)
+    return module
+
+
+
+  proc finalizeInstall(module: var AelmModule) =
+    # Seed base conf and write module conf (approximate minimal 'auto' module behavior)
+    expandPlaceholders module
+    let aelmModConfName = module.root / CONF_MOD_FILENAME
+    if user_enabled and fileExists (getHomeDir() / ".aelm" / CONF_FILENAME):
+      copyFile(getHomeDir() / ".aelm" / CONF_FILENAME, module.root / CONF_FILENAME)
+    elif fileExists (CONF_FILENAME):
+      copyFile(CONF_FILENAME, module.root / CONF_FILENAME)
+    writeFile aelmModConfName, $module
+    # Run setup phases and scripts
+    runAelmSetupCommands(module, phase="presetup")
+    runAelmSetupCommands(module, phase="setup")
+    runAelmScriptCommands module
+    runAelmSetupCommands(module, phase="postsetup")
+    # Remove downloaded archives
+    removeAelmDownloads module
+    # Generate activation/deactivation scripts like normal module installs
+    writeActivationScripts(module, module.root)
+    # Register module for --user installs
+    if userEnabled:
+      var userModules = readUserInstalledModules()
+      userModules.incl &"{module.category}@{module.version}"
+      writeUserInstalledModules userModules
+      writeSuccess("Installed: ", &"Restart your shell to enable {module.category}@{module.version}\n           Or type: source " & (getHomeDir() / ".aelm" / "activate"))
+
+  proc addModuleFromUrl(url: string, destination: string, opts: InstallOptions) =
+    var module = minimalAutoModuleFromUrl(url, destination)
+
+    createDir module.root
+    # Download/infer and expand
+    runAelmDownloadsAndExpandAuto(module)
+    # Finalize install using shared routine
+    finalizeInstall(module, opts)
+    echo &"Inferred tool name: {module.category}"
+    echo &"Install location: {module.root}"
+  # Process each argument: parse name/url and destination, then act accordingly
+  for arg in addArgs:
+    let (nameOrUrl, destination) = splitNameAndDest(arg)
+    if isUrl(nameOrUrl):
+      addModuleFromUrl(nameOrUrl, destination, InstallOptions(prefer_system: prefer_system_list, dryRun: dry_runEnabled, forceOverwrite: false, user: userEnabled))
+    else:
+      # Module name: normal repo lookup and add
+      let (category, version, nickname) = nameOrUrl.getPackageTriplet
+      addModule(category, version, if destination.len > 0: destination else: nickname, prefer_system_list)
 
 proc doRemove =
   # expect up to 2 arguments
@@ -1120,7 +1229,7 @@ proc doScript() =
 
 proc doCreatePackage =
   const contentTemplate = """
-# example of all other optional fields - normally unnecessary 
+# example of all other optional fields - normally unnecessary
 # $name:
 #   versions:
 #     latest:
@@ -1182,7 +1291,7 @@ proc doCheckPackage =
   if not fileExists path:
     writeError("Error: ", &"No file named '{name}'")
     quit(1)
-  let repo = helperLoadAelmRepo path 
+  let repo = helperLoadAelmRepo path
   stdout.styledWriteLine "Package format ", fgGreen, "OK"
   if checkDownloadsEnabled:
     let TestDir = appCacheDir() / "dltest"
@@ -1336,6 +1445,10 @@ options:
   --user
     Install persistently for the current user into $HOME/.aelm/
     Custom names (:newname) are ignored when using --user
+
+  --dry-run
+    Show what would happen without downloading any files.
+    Stops right after printing 'downloading <url>'.
     example: add cmake python --user
 """
 const HELPREMOVE = """
@@ -1496,6 +1609,7 @@ when isMainModule:
         p.captureArg help: break
         p.captureArg clearTheEntireCache: break
         p.captureArg user: continue
+        p.captureArg dry_run: continue
         p.captureArg prefer_system: continue
         p.captureArg ignore_system: continue
         p.captureArg description: continue
